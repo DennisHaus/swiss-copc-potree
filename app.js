@@ -973,6 +973,53 @@ async function loadSelectedTile() {
 
    }
 
+   function setPointColorMode(mode) {
+
+    for (
+        const pointcloud
+        of state.loadedClouds.values()
+    ) {
+
+        const material =
+            pointcloud.material;
+
+        switch (mode) {
+
+            case "rgb":
+
+                material.pointColorType =
+                    Potree.PointColorType.RGB;
+
+                break;
+
+
+            case "intensity":
+
+                material.pointColorType =
+                    Potree.PointColorType.INTENSITY;
+
+                break;
+
+
+            case "classification":
+
+                material.pointColorType =
+                    Potree.PointColorType.CLASSIFICATION;
+
+                break;
+
+
+            case "elevation":
+
+                material.pointColorType =
+                    Potree.PointColorType.ELEVATION;
+
+                break;
+
+        }
+    }
+}
+
 /* =========================================================
    UNLOAD SELECTED
    ========================================================= */

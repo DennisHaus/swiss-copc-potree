@@ -1,0 +1,11 @@
+{
+  "name": "swiss-copc-potree",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Swiss swissSURFACE3D COPC viewer using Potree",
+  "scripts": {
+    "setup": "bash scripts/setup.sh",
+    "build": "cd vendor/potree && npm install && npm run build",
+    "start": "python3 -m http.server 8080"
+  }
+}

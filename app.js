@@ -1,5 +1,6 @@
 /* =========================================================
    Swiss LiDAR COPC Viewer
+   Potree 1.8
    ========================================================= */
 
 "use strict";
@@ -30,11 +31,15 @@ const state = {
    POTREE VIEWER
    ========================================================= */
 
+const renderArea =
+    document.getElementById(
+        "potree_render_area"
+    );
+
+
 const viewer =
     new Potree.Viewer(
-        document.getElementById(
-            "potree_render_area"
-        )
+        renderArea
     );
 
 
@@ -54,26 +59,11 @@ viewer.loadSettingsFromURL();
 
 
 /*
- * Potree GUI.
+ * Deliberately DO NOT call viewer.loadGUI().
+ *
+ * The Potree sidebar/menu is not useful for this
+ * application because we provide our own controls.
  */
-
-viewer.loadGUI(() => {
-
-    viewer.setLanguage("en");
-
-    $("#menu_appearance")
-        .next()
-        .show();
-
-    $("#menu_tools")
-        .next()
-        .show();
-
-    $("#menu_clipping")
-        .next()
-        .show();
-
-});
 
 
 /* =========================================================
@@ -114,11 +104,24 @@ L.tileLayer(
    HELPERS
    ========================================================= */
 
+function getElement(id) {
+
+    return document.getElementById(id);
+
+}
+
+
 function setStatus(message) {
 
-    document.getElementById(
-        "status"
-    ).textContent = message;
+    const element =
+        getElement("status");
+
+    if (element) {
+
+        element.textContent =
+            message;
+
+    }
 
 }
 
@@ -126,11 +129,733 @@ function setStatus(message) {
 function escapeHtml(value) {
 
     return String(value)
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;")
-        .replaceAll('"', "&quot;")
-        .replaceAll("'", "&#039;");
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+
+}
+
+
+/* =========================================================
+   POINT ATTRIBUTE INSPECTION
+   ========================================================= */
+
+/*
+ * Convert Potree's point-attribute object into a
+ * simple list that is easy to inspect in the console.
+ */
+
+function inspectPointCloudAttributes(pointcloud) {
+
+    console.group(
+        "Swiss LiDAR - Point Cloud Inspection"
+    );
+
+
+    console.log(
+        "Point cloud:",
+        pointcloud
+    );
+
+
+    console.log(
+        "PcoGeometry:",
+        pointcloud.pcoGeometry
+    );
+
+
+    console.log(
+        "Material:",
+        pointcloud.material
+    );
+
+
+    const pcoGeometry =
+        pointcloud.pcoGeometry;
+
+
+    if (!pcoGeometry) {
+
+        console.warn(
+            "No pcoGeometry found."
+        );
+
+        console.groupEnd();
+
+        return [];
+
+    }
+
+
+    const pointAttributes =
+        pcoGeometry.pointAttributes;
+
+
+    console.log(
+        "Raw pointAttributes:",
+        pointAttributes
+    );
+
+
+    if (!pointAttributes) {
+
+        console.warn(
+            "No pointAttributes found."
+        );
+
+        console.groupEnd();
+
+        return [];
+
+    }
+
+
+    let attributes = [];
+
+
+    /*
+     * Potree normally stores the individual
+     * attributes in .attributes.
+     */
+
+    if (
+        Array.isArray(
+            pointAttributes.attributes
+        )
+    ) {
+
+        attributes =
+            pointAttributes.attributes;
+
+    }
+
+
+    const names =
+        attributes.map(
+            function(attribute) {
+
+                return attribute.name;
+
+            }
+        );
+
+
+    console.log(
+        "Detected point attribute names:",
+        names
+    );
+
+
+    /*
+     * Print detailed information.
+     */
+
+    attributes.forEach(
+        function(attribute) {
+
+            console.log(
+                "Attribute:",
+                attribute.name,
+                attribute
+            );
+
+        }
+    );
+
+
+    /*
+     * Useful summary.
+     */
+
+    const hasAttribute =
+        function(name) {
+
+            return names.indexOf(name) !== -1;
+
+        };
+
+
+    console.log(
+        "Has intensity:",
+        hasAttribute("INTENSITY")
+    );
+
+
+    console.log(
+        "Has classification:",
+        hasAttribute("CLASSIFICATION")
+    );
+
+
+    console.log(
+        "Has RGB:",
+        hasAttribute("RGB")
+    );
+
+
+    console.log(
+        "Has return number:",
+        hasAttribute("RETURN_NUMBER")
+    );
+
+
+    console.log(
+        "Has number of returns:",
+        hasAttribute("NUMBER_OF_RETURNS")
+    );
+
+
+    console.log(
+        "Has point source ID:",
+        hasAttribute("SOURCE_ID") ||
+        hasAttribute("POINT_SOURCE_ID")
+    );
+
+
+    console.groupEnd();
+
+
+    return names;
+
+}
+
+
+/* =========================================================
+   ATTRIBUTE HELPERS
+   ========================================================= */
+
+function getPointAttributeNames(pointcloud) {
+
+    const pcoGeometry =
+        pointcloud.pcoGeometry;
+
+
+    if (!pcoGeometry) {
+
+        return [];
+
+    }
+
+
+    const pointAttributes =
+        pcoGeometry.pointAttributes;
+
+
+    if (!pointAttributes) {
+
+        return [];
+
+    }
+
+
+    if (
+        Array.isArray(
+            pointAttributes.attributes
+        )
+    ) {
+
+        return pointAttributes.attributes.map(
+            function(attribute) {
+
+                return attribute.name;
+
+            }
+        );
+
+    }
+
+
+    return [];
+
+}
+
+
+function hasPointAttribute(
+    pointcloud,
+    name
+) {
+
+    const names =
+        getPointAttributeNames(
+            pointcloud
+        );
+
+
+    return (
+        names.indexOf(name) !== -1
+    );
+
+}
+
+
+/* =========================================================
+   POINT COLOR MODE
+   ========================================================= */
+
+function getElevationColorType() {
+
+    /*
+     * Potree versions use slightly different
+     * names here.
+     *
+     * Newer versions:
+     *     ELEVATION
+     *
+     * Older Potree versions:
+     *     HEIGHT
+     */
+
+    if (
+        Potree.PointColorType &&
+        typeof Potree.PointColorType.ELEVATION !==
+            "undefined"
+    ) {
+
+        return Potree.PointColorType.ELEVATION;
+
+    }
+
+
+    if (
+        Potree.PointColorType &&
+        typeof Potree.PointColorType.HEIGHT !==
+            "undefined"
+    ) {
+
+        return Potree.PointColorType.HEIGHT;
+
+    }
+
+
+    return null;
+
+}
+
+
+function setPointCloudColorMode(
+    pointcloud,
+    mode
+) {
+
+    if (!pointcloud) {
+
+        return false;
+
+    }
+
+
+    const material =
+        pointcloud.material;
+
+
+    if (!material) {
+
+        return false;
+
+    }
+
+
+    const hasIntensity =
+        hasPointAttribute(
+            pointcloud,
+            "INTENSITY"
+        );
+
+
+    const hasClassification =
+        hasPointAttribute(
+            pointcloud,
+            "CLASSIFICATION"
+        );
+
+
+    const hasReturnNumber =
+        hasPointAttribute(
+            pointcloud,
+            "RETURN_NUMBER"
+        );
+
+
+    const hasSource =
+        hasPointAttribute(
+            pointcloud,
+            "SOURCE_ID"
+        ) ||
+        hasPointAttribute(
+            pointcloud,
+            "POINT_SOURCE_ID"
+        );
+
+
+    switch (mode) {
+
+        case "intensity":
+
+            if (
+                hasIntensity &&
+                Potree.PointColorType.INTENSITY !==
+                    undefined
+            ) {
+
+                material.pointColorType =
+                    Potree.PointColorType.INTENSITY;
+
+                return true;
+
+            }
+
+            break;
+
+
+        case "intensity-gradient":
+
+            if (
+                hasIntensity &&
+                Potree.PointColorType.INTENSITY_GRADIENT !==
+                    undefined
+            ) {
+
+                material.pointColorType =
+                    Potree.PointColorType.INTENSITY_GRADIENT;
+
+                return true;
+
+            }
+
+            break;
+
+
+        case "classification":
+
+            if (
+                hasClassification &&
+                Potree.PointColorType.CLASSIFICATION !==
+                    undefined
+            ) {
+
+                material.pointColorType =
+                    Potree.PointColorType.CLASSIFICATION;
+
+                return true;
+
+            }
+
+            break;
+
+
+        case "elevation":
+
+            {
+
+                const elevationType =
+                    getElevationColorType();
+
+
+                if (
+                    elevationType !== null
+                ) {
+
+                    material.pointColorType =
+                        elevationType;
+
+                    return true;
+
+                }
+
+            }
+
+            break;
+
+
+        case "return-number":
+
+            if (
+                hasReturnNumber &&
+                Potree.PointColorType.RETURN_NUMBER !==
+                    undefined
+            ) {
+
+                material.pointColorType =
+                    Potree.PointColorType.RETURN_NUMBER;
+
+                return true;
+
+            }
+
+            break;
+
+
+        case "source-id":
+
+            if (
+                hasSource &&
+                Potree.PointColorType.SOURCE !==
+                    undefined
+            ) {
+
+                material.pointColorType =
+                    Potree.PointColorType.SOURCE;
+
+                return true;
+
+            }
+
+            break;
+
+    }
+
+
+    return false;
+
+}
+
+
+/*
+ * Automatically select the best available mode.
+ *
+ * Since your SwissTopo COPC has no RGB, intensity
+ * is preferred.
+ */
+
+function setBestAvailableColorMode(
+    pointcloud
+) {
+
+    if (
+        setPointCloudColorMode(
+            pointcloud,
+            "intensity-gradient"
+        )
+    ) {
+
+        return "intensity-gradient";
+
+    }
+
+
+    if (
+        setPointCloudColorMode(
+            pointcloud,
+            "intensity"
+        )
+    ) {
+
+        return "intensity";
+
+    }
+
+
+    if (
+        setPointCloudColorMode(
+            pointcloud,
+            "classification"
+        )
+    ) {
+
+        return "classification";
+
+    }
+
+
+    if (
+        setPointCloudColorMode(
+            pointcloud,
+            "elevation"
+        )
+    ) {
+
+        return "elevation";
+
+    }
+
+
+    return null;
+
+}
+
+
+/*
+ * Apply selected color mode to all loaded clouds.
+ */
+
+function setAllPointCloudColorMode(
+    mode
+) {
+
+    let changed = false;
+
+
+    state.loadedClouds.forEach(
+        function(pointcloud) {
+
+            if (
+                setPointCloudColorMode(
+                    pointcloud,
+                    mode
+                )
+            ) {
+
+                changed = true;
+
+            }
+
+        }
+    );
+
+
+    if (changed) {
+
+        setStatus(
+            "Point color: " +
+            mode
+        );
+
+    } else {
+
+        setStatus(
+            "The selected attribute is not available."
+        );
+
+    }
+
+}
+
+
+/* =========================================================
+   CONFIGURE POINT CLOUD
+   ========================================================= */
+
+function configurePointCloud(
+    pointcloud
+) {
+
+    const material =
+        pointcloud.material;
+
+
+    /*
+     * Point size.
+     */
+
+    material.size =
+        1.5;
+
+
+    material.minSize =
+        2;
+
+
+    /*
+     * Adaptive point sizing.
+     */
+
+    material.pointSizeType =
+        Potree.PointSizeType.ADAPTIVE;
+
+
+    /*
+     * Square points.
+     */
+
+    material.shape =
+        Potree.PointShape.SQUARE;
+
+
+    /*
+     * Fully opaque.
+     */
+
+    material.opacity =
+        1.0;
+
+
+    /*
+     * Inspect attributes.
+     */
+
+    const attributes =
+        inspectPointCloudAttributes(
+            pointcloud
+        );
+
+
+    /*
+     * Display the attributes in our UI.
+     */
+
+    updateAttributeDisplay(
+        attributes
+    );
+
+
+    /*
+     * No RGB exists in this dataset, so choose
+     * intensity / classification / elevation.
+     */
+
+    const mode =
+        setBestAvailableColorMode(
+            pointcloud
+        );
+
+
+    console.log(
+        "Initial point color mode:",
+        mode
+    );
+
+}
+
+
+/* =========================================================
+   ATTRIBUTE DISPLAY
+   ========================================================= */
+
+function updateAttributeDisplay(
+    attributes
+) {
+
+    const element =
+        getElement(
+            "selected-attributes"
+        );
+
+
+    if (!element) {
+
+        return;
+
+    }
+
+
+    if (
+        !attributes ||
+        !attributes.length
+    ) {
+
+        element.textContent =
+            "Point attributes unavailable.";
+
+        return;
+
+    }
+
+
+    element.innerHTML =
+        "<b>Attributes:</b> " +
+        attributes
+            .map(
+                function(name) {
+
+                    return escapeHtml(
+                        name
+                    );
+
+                }
+            )
+            .join(", ");
 
 }
 
@@ -139,20 +864,11 @@ function escapeHtml(value) {
    BBOX
    ========================================================= */
 
-/*
- * Leaflet returns:
- *
- * south, west, north, east
- *
- * STAC expects:
- *
- * west, south, east, north
- */
-
 function mapBBox() {
 
     const bounds =
         map.getBounds();
+
 
     return [
         bounds.getWest(),
@@ -168,22 +884,30 @@ function mapBBox() {
    STAC
    ========================================================= */
 
-function buildSTACURL(bbox) {
+function buildSTACURL(
+    bbox
+) {
 
     const url =
         new URL(
-            `${CONFIG.STAC_ROOT}/collections/${CONFIG.COLLECTION}/items`
+            CONFIG.STAC_ROOT +
+            "/collections/" +
+            CONFIG.COLLECTION +
+            "/items"
         );
+
 
     url.searchParams.set(
         "bbox",
         bbox.join(",")
     );
 
+
     url.searchParams.set(
         "limit",
         "100"
     );
+
 
     return url;
 
@@ -191,35 +915,51 @@ function buildSTACURL(bbox) {
 
 
 /*
- * Get all pages of STAC results.
+ * Get STAC pages.
  */
 
 async function fetchAllSTACItems(
-    firstURL
+    firstURL,
+    signal
 ) {
 
     let url =
         firstURL;
 
+
     const items = [];
+
 
     while (url) {
 
         const response =
-            await fetch(url);
+            await fetch(
+                url,
+                {
+                    signal: signal
+                }
+            );
+
 
         if (!response.ok) {
 
             throw new Error(
-                `STAC request failed: ${response.status}`
+                "STAC request failed: " +
+                response.status
             );
 
         }
 
+
         const data =
             await response.json();
 
-        if (Array.isArray(data.features)) {
+
+        if (
+            Array.isArray(
+                data.features
+            )
+        ) {
 
             items.push(
                 ...data.features
@@ -228,31 +968,59 @@ async function fetchAllSTACItems(
         }
 
 
-        /*
-         * STAC pagination.
-         */
+        let nextURL =
+            null;
 
-        const next =
-            data.links?.find(
-                link =>
-                    link.rel === "next"
-            );
+
+        if (
+            Array.isArray(
+                data.links
+            )
+        ) {
+
+            for (
+                let i = 0;
+                i < data.links.length;
+                i++
+            ) {
+
+                const link =
+                    data.links[i];
+
+
+                if (
+                    link &&
+                    link.rel === "next" &&
+                    link.href
+                ) {
+
+                    nextURL =
+                        link.href;
+
+                    break;
+
+                }
+
+            }
+
+        }
+
 
         url =
-            next?.href || null;
+            nextURL;
 
-        /*
-         * Safety limit.
-         */
 
-        if (items.length >=
-            CONFIG.MAX_TILES) {
+        if (
+            items.length >=
+            CONFIG.MAX_TILES
+        ) {
 
             break;
 
         }
 
     }
+
 
     return items;
 
@@ -263,31 +1031,54 @@ async function fetchAllSTACItems(
    FIND COPC ASSET
    ========================================================= */
 
-function findCOPCAsset(item) {
+function findCOPCAsset(
+    item
+) {
 
     const assets =
         Object.values(
             item.assets || {}
         );
 
-    /*
-     * Prefer an explicitly COPC-named asset.
-     */
 
     let asset =
         assets.find(
-            a =>
-                typeof a.href === "string" &&
-                (
-                    a.href
-                        .toLowerCase()
-                        .includes(".copc.laz")
-                    ||
-                    a.title
-                        ?.toLowerCase()
-                        .includes("copc")
-                )
+            function(a) {
+
+                if (
+                    !a ||
+                    typeof a.href !==
+                        "string"
+                ) {
+
+                    return false;
+
+                }
+
+
+                const href =
+                    a.href.toLowerCase();
+
+
+                const title =
+                    typeof a.title ===
+                        "string"
+                        ? a.title.toLowerCase()
+                        : "";
+
+
+                return (
+                    href.indexOf(
+                        ".copc.laz"
+                    ) !== -1 ||
+                    title.indexOf(
+                        "copc"
+                    ) !== -1
+                );
+
+            }
         );
+
 
     if (asset) {
 
@@ -296,20 +1087,30 @@ function findCOPCAsset(item) {
     }
 
 
-    /*
-     * Some catalogue versions may expose
-     * the COPC file under a less obvious asset
-     * name. Look at the href.
-     */
-
     asset =
         assets.find(
-            a =>
-                typeof a.href === "string" &&
-                a.href
-                    .toLowerCase()
-                    .includes("copc")
+            function(a) {
+
+                if (
+                    !a ||
+                    typeof a.href !==
+                        "string"
+                ) {
+
+                    return false;
+
+                }
+
+
+                return (
+                    a.href
+                        .toLowerCase()
+                        .indexOf("copc") !== -1
+                );
+
+            }
         );
+
 
     return asset || null;
 
@@ -320,10 +1121,15 @@ function findCOPCAsset(item) {
    NORMALIZE TILE
    ========================================================= */
 
-function normalizeTile(item) {
+function normalizeTile(
+    item
+) {
 
     const asset =
-        findCOPCAsset(item);
+        findCOPCAsset(
+            item
+        );
+
 
     if (!asset) {
 
@@ -331,8 +1137,10 @@ function normalizeTile(item) {
 
     }
 
+
     const bbox =
         item.bbox;
+
 
     if (
         !bbox ||
@@ -343,36 +1151,107 @@ function normalizeTile(item) {
 
     }
 
+
+    let title =
+        item.id;
+
+
+    if (
+        item.properties &&
+        item.properties.title
+    ) {
+
+        title =
+            item.properties.title;
+
+    }
+
+
+    let date =
+        null;
+
+
+    if (
+        item.properties
+    ) {
+
+        if (
+            item.properties.datetime
+        ) {
+
+            date =
+                item.properties.datetime;
+
+        } else if (
+            item.properties.updated
+        ) {
+
+            date =
+                item.properties.updated;
+
+        }
+
+    }
+
+
+    let assetTitle =
+        "";
+
+
+    if (asset.title) {
+
+        assetTitle =
+            asset.title;
+
+    }
+
+
+    let size =
+        null;
+
+
+    if (
+        asset["file:size"]
+    ) {
+
+        size =
+            asset["file:size"];
+
+    } else if (
+        asset.size
+    ) {
+
+        size =
+            asset.size;
+
+    }
+
+
     return {
 
         id:
             item.id,
 
         title:
-            item.properties?.title ||
-            item.id,
+            title,
 
-        bbox: bbox,
+        bbox:
+            bbox,
 
         geometry:
             item.geometry,
 
         date:
-            item.properties?.datetime ||
-            item.properties?.updated ||
-            null,
+            date,
 
         href:
             asset.href,
 
         assetTitle:
-            asset.title ||
-            "",
+            assetTitle,
 
         size:
-            asset["file:size"] ||
-            asset["size"] ||
-            null
+            size
 
     };
 
@@ -385,11 +1264,14 @@ function normalizeTile(item) {
 
 async function findTiles() {
 
-    if (state.queryController) {
+    if (
+        state.queryController
+    ) {
 
         state.queryController.abort();
 
     }
+
 
     state.queryController =
         new AbortController();
@@ -408,20 +1290,32 @@ async function findTiles() {
         const bbox =
             mapBBox();
 
+
         const url =
-            buildSTACURL(bbox);
+            buildSTACURL(
+                bbox
+            );
 
 
         const response =
             await fetchAllSTACItems(
-                url.href
+                url.href,
+                state.queryController.signal
             );
 
 
         const tiles =
             response
-                .map(normalizeTile)
-                .filter(Boolean)
+                .map(
+                    normalizeTile
+                )
+                .filter(
+                    function(tile) {
+
+                        return tile !== null;
+
+                    }
+                )
                 .slice(
                     0,
                     CONFIG.MAX_TILES
@@ -436,13 +1330,15 @@ async function findTiles() {
             tiles
         );
 
+
         renderTileList(
             tiles
         );
 
 
         setStatus(
-            `${tiles.length} COPC tile(s) found.`
+            tiles.length +
+            " COPC tile(s) found."
         );
 
 
@@ -457,10 +1353,15 @@ async function findTiles() {
 
         }
 
-        console.error(error);
+
+        console.error(
+            error
+        );
+
 
         setStatus(
-            `Tile search failed: ${error.message}`
+            "Tile search failed: " +
+            error.message
         );
 
     }
@@ -472,15 +1373,21 @@ async function findTiles() {
    DRAW TILE FOOTPRINTS
    ========================================================= */
 
-function drawTiles(tiles) {
+function drawTiles(
+    tiles
+) {
 
     clearTileLayers();
 
 
-    for (const tile of tiles) {
+    for (
+        const tile
+        of tiles
+    ) {
 
         const bbox =
             tile.bbox;
+
 
         const rectangle =
             L.rectangle(
@@ -512,7 +1419,7 @@ function drawTiles(tiles) {
 
         rectangle.on(
             "click",
-            () => {
+            function() {
 
                 selectTile(
                     tile.id
@@ -551,16 +1458,16 @@ function drawTiles(tiles) {
 
 function clearTileLayers() {
 
-    for (
-        const layer
-        of state.tileLayers.values()
-    ) {
+    state.tileLayers.forEach(
+        function(layer) {
 
-        map.removeLayer(
-            layer
-        );
+            map.removeLayer(
+                layer
+            );
 
-    }
+        }
+    );
+
 
     state.tileLayers.clear();
 
@@ -571,42 +1478,57 @@ function clearTileLayers() {
    TILE LIST
    ========================================================= */
 
-function renderTileList(tiles) {
+function renderTileList(
+    tiles
+) {
 
     const list =
-        document.getElementById(
+        getElement(
             "tile-list"
         );
 
 
     const count =
-        document.getElementById(
+        getElement(
             "tile-count"
         );
 
 
-    count.textContent =
-        tiles.length;
-
-
-    list.innerHTML = "";
-
-
-    if (!tiles.length) {
-
-        list.innerHTML =
-            `
-            <div class="tile-row">
-                No COPC tiles found.
-            </div>
-            `;
+    if (!list) {
 
         return;
 
     }
 
 
-    for (const tile of tiles) {
+    if (count) {
+
+        count.textContent =
+            tiles.length;
+
+    }
+
+
+    list.innerHTML =
+        "";
+
+
+    if (!tiles.length) {
+
+        list.innerHTML =
+            '<div class="tile-row">' +
+            'No COPC tiles found.' +
+            '</div>';
+
+        return;
+
+    }
+
+
+    for (
+        const tile
+        of tiles
+    ) {
 
         const row =
             document.createElement(
@@ -623,20 +1545,22 @@ function renderTileList(tiles) {
 
 
         row.innerHTML =
-            `
-            <div class="tile-name">
-                ${escapeHtml(tile.title)}
-            </div>
+            '<div class="tile-name">' +
+            escapeHtml(
+                tile.title
+            ) +
+            '</div>' +
 
-            <div class="tile-meta">
-                ${escapeHtml(tile.id)}
-            </div>
-            `;
+            '<div class="tile-meta">' +
+            escapeHtml(
+                tile.id
+            ) +
+            '</div>';
 
 
         row.addEventListener(
             "click",
-            () => {
+            function() {
 
                 selectTile(
                     tile.id
@@ -659,11 +1583,17 @@ function renderTileList(tiles) {
    SELECT TILE
    ========================================================= */
 
-function selectTile(id) {
+function selectTile(
+    id
+) {
 
     const tile =
         state.tiles.find(
-            t => t.id === id
+            function(t) {
+
+                return t.id === id;
+
+            }
         );
 
 
@@ -682,104 +1612,170 @@ function selectTile(id) {
      * Highlight map rectangle.
      */
 
-    for (
-        const [tileId, layer]
-        of state.tileLayers
-    ) {
+    state.tileLayers.forEach(
+        function(layer, tileId) {
 
-        if (
-            tileId === id
-        ) {
+            if (
+                tileId === id
+            ) {
 
-            layer.setStyle({
-                color:
-                    "#ffcc00",
+                layer.setStyle({
+                    color:
+                        "#ffcc00",
 
-                weight:
-                    3,
+                    weight:
+                        3,
 
-                fillColor:
-                    "#ffcc00",
+                    fillColor:
+                        "#ffcc00",
 
-                fillOpacity:
-                    0.15
-            });
+                    fillOpacity:
+                        0.15
+                });
 
-        } else {
+            } else {
 
-            layer.setStyle({
-                color:
-                    "#ffffff",
+                layer.setStyle({
+                    color:
+                        "#ffffff",
 
-                weight:
-                    1,
+                    weight:
+                        1,
 
-                fillColor:
-                    "#ffffff",
+                    fillColor:
+                        "#ffffff",
 
-                fillOpacity:
-                    0.05
-            });
+                    fillOpacity:
+                        0.05
+                });
+
+            }
 
         }
-
-    }
+    );
 
 
     /*
      * Highlight list item.
      */
 
-    document
-        .querySelectorAll(
+    const rows =
+        document.querySelectorAll(
             ".tile-row"
-        )
-        .forEach(
-            row => {
-
-                row.classList.toggle(
-                    "selected",
-                    row.dataset.id === id
-                );
-
-            }
         );
+
+
+    rows.forEach(
+        function(row) {
+
+            row.classList.toggle(
+                "selected",
+                row.dataset.id === id
+            );
+
+        }
+    );
 
 
     /*
      * Selected panel.
      */
 
-    document.getElementById(
-        "selected-title"
-    ).textContent =
-        tile.title;
-
-
-    document.getElementById(
-        "selected-info"
-    ).innerHTML =
-        `
-        <div><b>ID:</b> ${escapeHtml(tile.id)}</div>
-        <div><b>COPC:</b> ${escapeHtml(tile.href)}</div>
-        `;
-
-
-    document.getElementById(
-        "load-button"
-    ).disabled = false;
-
-
-    document.getElementById(
-        "unload-button"
-    ).disabled =
-        !state.loadedClouds.has(
-            tile.id
+    const titleElement =
+        getElement(
+            "selected-title"
         );
 
 
+    if (titleElement) {
+
+        titleElement.textContent =
+            tile.title;
+
+    }
+
+
+    const infoElement =
+        getElement(
+            "selected-info"
+        );
+
+
+    if (infoElement) {
+
+        infoElement.innerHTML =
+            '<div><b>ID:</b> ' +
+            escapeHtml(tile.id) +
+            '</div>' +
+
+            '<div><b>COPC:</b> ' +
+            escapeHtml(tile.href) +
+            '</div>';
+
+    }
+
+
+    const attributesElement =
+        getElement(
+            "selected-attributes"
+        );
+
+
+    if (attributesElement) {
+
+        attributesElement.textContent =
+            "Load the tile to inspect point attributes.";
+
+    }
+
+
+    const loadButton =
+        getElement(
+            "load-button"
+        );
+
+
+    if (loadButton) {
+
+        loadButton.disabled =
+            false;
+
+    }
+
+
+    const unloadButton =
+        getElement(
+            "unload-button"
+        );
+
+
+    if (unloadButton) {
+
+        unloadButton.disabled =
+            !state.loadedClouds.has(
+                tile.id
+            );
+
+    }
+
+
+    const downloadButton =
+        getElement(
+            "download-button"
+        );
+
+
+    if (downloadButton) {
+
+        downloadButton.disabled =
+            false;
+
+    }
+
+
     setStatus(
-        `Selected ${tile.id}`
+        "Selected " +
+        tile.id
     );
 
 }
@@ -802,10 +1798,6 @@ async function loadSelectedTile() {
     }
 
 
-    /*
-     * Already loaded?
-     */
-
     if (
         state.loadedClouds.has(
             tile.id
@@ -821,18 +1813,16 @@ async function loadSelectedTile() {
     }
 
 
-    /*
-     * Prevent excessive simultaneous
-     * clouds.
-     */
-
     if (
         state.loadedClouds.size >=
         CONFIG.MAX_LOADED_POINTCLOUDS
     ) {
 
         setStatus(
-            `Maximum of ${CONFIG.MAX_LOADED_POINTCLOUDS} loaded tiles reached. Unload one first.`
+            "Maximum of " +
+            CONFIG.MAX_LOADED_POINTCLOUDS +
+            " loaded tiles reached. " +
+            "Unload one first."
         );
 
         return;
@@ -841,94 +1831,127 @@ async function loadSelectedTile() {
 
 
     setStatus(
-        `Starting COPC stream for ${tile.id}...`
+        "Starting COPC stream for " +
+        tile.id +
+        "..."
     );
 
 
     try {
 
-        /*
-         * Potree supports COPC URLs directly.
-         */
-
         await new Promise(
-            (resolve, reject) => {
+            function(resolve, reject) {
 
-                Potree.loadPointCloud(
-                    tile.href,
-                    tile.title,
+                try {
 
-                    event => {
+                    Potree.loadPointCloud(
+                        tile.href,
+                        tile.title,
+                        function(event) {
 
-                        try {
+                            try {
 
-                            const pointcloud =
-                                event.pointcloud;
-
-
-                            configurePointCloud(
-                                pointcloud
-                            );
+                                const pointcloud =
+                                    event.pointcloud;
 
 
-                            viewer.scene.addPointCloud(
-                                pointcloud
-                            );
+                                if (!pointcloud) {
+
+                                    throw new Error(
+                                        "Potree did not return a point cloud."
+                                    );
+
+                                }
 
 
-                            state.loadedClouds.set(
-                                tile.id,
-                                pointcloud
-                            );
+                                configurePointCloud(
+                                    pointcloud
+                                );
 
 
-                            document.getElementById(
-                                "unload-button"
-                            ).disabled = false;
+                                viewer.scene.addPointCloud(
+                                    pointcloud
+                                );
 
 
-                            setStatus(
-                                `Streaming ${tile.id}`
-                            );
+                                state.loadedClouds.set(
+                                    tile.id,
+                                    pointcloud
+                                );
 
 
-                            /*
-                             * Only automatically fit
-                             * the first loaded tile.
-                             */
+                                const unloadButton =
+                                    getElement(
+                                        "unload-button"
+                                    );
 
-                            if (
-                                state.loadedClouds.size === 1
-                            ) {
 
-                                viewer.fitToScreen(
-                                    0.5
+                                if (unloadButton) {
+
+                                    unloadButton.disabled =
+                                        false;
+
+                                }
+
+
+                                setStatus(
+                                    "Streaming " +
+                                    tile.id
+                                );
+
+
+                                /*
+                                 * Automatically fit the first
+                                 * loaded tile.
+                                 */
+
+                                if (
+                                    state.loadedClouds.size ===
+                                    1
+                                ) {
+
+                                    viewer.fitToScreen(
+                                        0.5
+                                    );
+
+                                }
+
+
+                                resolve();
+
+                            } catch (error) {
+
+                                reject(
+                                    error
                                 );
 
                             }
 
-
-                            resolve();
-
-                        } catch (error) {
-
-                            reject(error);
-
                         }
+                    );
 
-                    }
-                );
+                } catch (error) {
+
+                    reject(
+                        error
+                    );
+
+                }
 
             }
         );
 
-
     } catch (error) {
 
-        console.error(error);
+        console.error(
+            "COPC loading error:",
+            error
+        );
+
 
         setStatus(
-            `Could not load COPC: ${error.message}`
+            "Could not load COPC: " +
+            error.message
         );
 
     }
@@ -937,91 +1960,67 @@ async function loadSelectedTile() {
 
 
 /* =========================================================
-   CONFIGURE POINT CLOUD
+   REMOVE POINT CLOUD
    ========================================================= */
 
-   function configurePointCloud(pointcloud) {
+function removePointCloudFromViewer(
+    pointcloud
+) {
 
-       var material = pointcloud.material;
+    /*
+     * Some Potree versions expose removePointCloud().
+     */
 
-       // Point size
-       material.size = 1;
-       material.minSize = 2;
-
-       // Adaptive point sizing
-       material.pointSizeType =
-           Potree.PointSizeType.ADAPTIVE;
-
-       // Square points
-       material.shape =
-           Potree.PointShape.SQUARE;
-
-       /*
-        * Start with RGB.
-        */
-       material.activeAttributeName = "rgba";
-
-       /*
-        * Let Potree use the full point-cloud range.
-        */
-       material.opacity = 1.0;
-
-       /*
-        * Improve visibility.
-        */
-       material.size = 1.5;
-
-   }
-
-   function setPointColorMode(mode) {
-
-    for (
-        const pointcloud
-        of state.loadedClouds.values()
+    if (
+        viewer.scene.removePointCloud &&
+        typeof viewer.scene.removePointCloud ===
+            "function"
     ) {
 
-        const material =
-            pointcloud.material;
+        viewer.scene.removePointCloud(
+            pointcloud
+        );
 
-        switch (mode) {
+        return;
 
-            case "rgb":
-
-                material.pointColorType =
-                    Potree.PointColorType.RGB;
-
-                break;
+    }
 
 
-            case "intensity":
+    /*
+     * Potree 1.8 keeps point clouds in
+     * viewer.scene.pointclouds.
+     */
 
-                material.pointColorType =
-                    Potree.PointColorType.INTENSITY;
-
-                break;
-
-
-            case "classification":
-
-                material.pointColorType =
-                    Potree.PointColorType.CLASSIFICATION;
-
-                break;
+    const pointclouds =
+        viewer.scene.pointclouds;
 
 
-            case "elevation":
+    if (
+        Array.isArray(pointclouds)
+    ) {
 
-                material.pointColorType =
-                    Potree.PointColorType.ELEVATION;
+        const index =
+            pointclouds.indexOf(
+                pointcloud
+            );
 
-                break;
+
+        if (index !== -1) {
+
+            pointclouds.splice(
+                index,
+                1
+            );
 
         }
+
     }
+
 }
 
+
 /* =========================================================
-   UNLOAD SELECTED
+   UNLOAD SELECTED TILE
    ========================================================= */
 
 function unloadSelectedTile() {
@@ -1050,22 +2049,21 @@ function unloadSelectedTile() {
     }
 
 
-    viewer.scene.removePointCloud(
+    removePointCloudFromViewer(
         pointcloud
     );
 
-
-    /*
-     * Dispose where supported.
-     */
 
     try {
 
         pointcloud.dispose();
 
-    } catch {
+    } catch (error) {
 
-        // Ignore.
+        console.warn(
+            "Point cloud dispose failed:",
+            error
+        );
 
     }
 
@@ -1075,13 +2073,37 @@ function unloadSelectedTile() {
     );
 
 
-    document.getElementById(
-        "unload-button"
-    ).disabled = true;
+    const unloadButton =
+        getElement(
+            "unload-button"
+        );
+
+
+    if (unloadButton) {
+
+        unloadButton.disabled =
+            true;
+
+    }
+
+
+    const attributesElement =
+        getElement(
+            "selected-attributes"
+        );
+
+
+    if (attributesElement) {
+
+        attributesElement.textContent =
+            "Load the tile to inspect point attributes.";
+
+    }
 
 
     setStatus(
-        `Unloaded ${tile.id}`
+        "Unloaded " +
+        tile.id
     );
 
 }
@@ -1093,29 +2115,33 @@ function unloadSelectedTile() {
 
 function clearAll() {
 
-    for (
-        const pointcloud
-        of state.loadedClouds.values()
-    ) {
+    state.loadedClouds.forEach(
+        function(pointcloud) {
 
-        viewer.scene.removePointCloud(
-            pointcloud
-        );
+            removePointCloudFromViewer(
+                pointcloud
+            );
 
-        try {
 
-            pointcloud.dispose();
+            try {
 
-        } catch {
+                pointcloud.dispose();
 
-            // Ignore.
+            } catch (error) {
+
+                console.warn(
+                    "Point cloud dispose failed:",
+                    error
+                );
+
+            }
 
         }
-
-    }
+    );
 
 
     state.loadedClouds.clear();
+
 
     state.selectedTile =
         null;
@@ -1133,30 +2159,177 @@ function clearAll() {
     );
 
 
-    document.getElementById(
-        "selected-title"
-    ).textContent =
-        "No tile selected";
+    const selectedTitle =
+        getElement(
+            "selected-title"
+        );
 
 
-    document.getElementById(
-        "selected-info"
-    ).innerHTML =
-        "";
+    if (selectedTitle) {
+
+        selectedTitle.textContent =
+            "No tile selected";
+
+    }
 
 
-    document.getElementById(
-        "load-button"
-    ).disabled = true;
+    const selectedInfo =
+        getElement(
+            "selected-info"
+        );
 
 
-    document.getElementById(
-        "unload-button"
-    ).disabled = true;
+    if (selectedInfo) {
+
+        selectedInfo.innerHTML =
+            "";
+
+    }
+
+
+    const attributes =
+        getElement(
+            "selected-attributes"
+        );
+
+
+    if (attributes) {
+
+        attributes.textContent =
+            "Load a tile to inspect point attributes.";
+
+    }
+
+
+    const loadButton =
+        getElement(
+            "load-button"
+        );
+
+
+    if (loadButton) {
+
+        loadButton.disabled =
+            true;
+
+    }
+
+
+    const unloadButton =
+        getElement(
+            "unload-button"
+        );
+
+
+    if (unloadButton) {
+
+        unloadButton.disabled =
+            true;
+
+    }
+
+
+    const downloadButton =
+        getElement(
+            "download-button"
+        );
+
+
+    if (downloadButton) {
+
+        downloadButton.disabled =
+            true;
+
+    }
 
 
     setStatus(
         "Cleared."
+    );
+
+}
+
+
+/* =========================================================
+   DOWNLOAD COPC
+   ========================================================= */
+
+function downloadSelectedTile() {
+
+    const tile =
+        state.selectedTile;
+
+
+    if (!tile) {
+
+        setStatus(
+            "Select a tile first."
+        );
+
+        return;
+
+    }
+
+
+    if (!tile.href) {
+
+        setStatus(
+            "No COPC download URL is available."
+        );
+
+        return;
+
+    }
+
+
+    /*
+     * Use a normal link rather than fetch().
+     *
+     * This is important because COPC files can be
+     * very large and should not be downloaded into
+     * browser memory first.
+     *
+     * The final behaviour depends on the server's
+     * Content-Disposition/CORS configuration.
+     */
+
+    const link =
+        document.createElement(
+            "a"
+        );
+
+
+    link.href =
+        tile.href;
+
+
+    link.target =
+        "_blank";
+
+
+    link.rel =
+        "noopener";
+
+
+    link.textContent =
+        "Download COPC";
+
+
+    document.body.appendChild(
+        link
+    );
+
+
+    link.click();
+
+
+    document.body.removeChild(
+        link
+    );
+
+
+    setStatus(
+        "Opening COPC download..."
     );
 
 }
@@ -1170,7 +2343,10 @@ async function searchPlace(
     text
 ) {
 
-    if (!text.trim()) {
+    if (
+        !text ||
+        !text.trim()
+    ) {
 
         return;
 
@@ -1178,7 +2354,9 @@ async function searchPlace(
 
 
     setStatus(
-        `Searching for ${text}...`
+        "Searching for " +
+        text +
+        "..."
     );
 
 
@@ -1193,20 +2371,24 @@ async function searchPlace(
         text
     );
 
+
     url.searchParams.set(
         "type",
         "locations"
     );
+
 
     url.searchParams.set(
         "sr",
         "4326"
     );
 
+
     url.searchParams.set(
         "geometryFormat",
         "geojson"
     );
+
 
     url.searchParams.set(
         "limit",
@@ -1225,7 +2407,8 @@ async function searchPlace(
         if (!response.ok) {
 
             throw new Error(
-                `Search failed: ${response.status}`
+                "Search failed: " +
+                response.status
             );
 
         }
@@ -1242,7 +2425,10 @@ async function searchPlace(
 
     } catch (error) {
 
-        console.error(error);
+        console.error(
+            error
+        );
+
 
         setStatus(
             error.message
@@ -1262,18 +2448,37 @@ function renderSearchResults(
 ) {
 
     const container =
-        document.getElementById(
+        getElement(
             "search-results"
         );
+
+
+    if (!container) {
+
+        return;
+
+    }
 
 
     container.innerHTML =
         "";
 
 
-    const results =
-        data.results ||
+    let results =
         [];
+
+
+    if (
+        data &&
+        Array.isArray(
+            data.results
+        )
+    ) {
+
+        results =
+            data.results;
+
+    }
 
 
     for (
@@ -1291,24 +2496,91 @@ function renderSearchResults(
             "search-result";
 
 
-        row.textContent =
-            result.label ||
-            result.attrs?.label ||
-            result.name ||
+        let label =
             "Location";
+
+
+        if (
+            result.label
+        ) {
+
+            label =
+                result.label;
+
+        } else if (
+            result.attrs &&
+            result.attrs.label
+        ) {
+
+            label =
+                result.attrs.label;
+
+        } else if (
+            result.name
+        ) {
+
+            label =
+                result.name;
+
+        }
+
+
+        row.textContent =
+            label;
 
 
         row.addEventListener(
             "click",
-            () => {
+            function() {
 
-                const lon =
-                    result.lon ??
-                    result.geometry?.coordinates?.[0];
+                let lon =
+                    null;
 
-                const lat =
-                    result.lat ??
-                    result.geometry?.coordinates?.[1];
+
+                let lat =
+                    null;
+
+
+                if (
+                    typeof result.lon ===
+                    "number"
+                ) {
+
+                    lon =
+                        result.lon;
+
+                } else if (
+                    result.geometry &&
+                    Array.isArray(
+                        result.geometry.coordinates
+                    )
+                ) {
+
+                    lon =
+                        result.geometry.coordinates[0];
+
+                }
+
+
+                if (
+                    typeof result.lat ===
+                    "number"
+                ) {
+
+                    lat =
+                        result.lat;
+
+                } else if (
+                    result.geometry &&
+                    Array.isArray(
+                        result.geometry.coordinates
+                    )
+                ) {
+
+                    lat =
+                        result.geometry.coordinates[1];
+
+                }
 
 
                 if (
@@ -1343,19 +2615,14 @@ function renderSearchResults(
                                 lon
                             ]
                         )
-                        .addTo(map)
+                        .addTo(
+                            map
+                        )
                         .bindPopup(
-                            result.label ||
-                            result.name ||
-                            "Location"
+                            label
                         )
                         .openPopup();
 
-
-                    /*
-                     * Automatically search the
-                     * surrounding LiDAR tiles.
-                     */
 
                     findTiles();
 
@@ -1375,11 +2642,9 @@ function renderSearchResults(
     if (!results.length) {
 
         container.innerHTML =
-            `
-            <div class="search-result">
-                No results.
-            </div>
-            `;
+            '<div class="search-result">' +
+            'No results.' +
+            '</div>';
 
     }
 
@@ -1448,33 +2713,22 @@ async function loadTileFromURL() {
 
 
     setStatus(
-        `Looking up shared tile ${tileId}...`
+        "Looking up shared tile " +
+        tileId +
+        "..."
     );
 
-
-    /*
-     * We don't have a global tile list,
-     * so derive the tile search from the
-     * tile ID by asking STAC for matching
-     * items.
-     */
 
     try {
 
         const url =
             new URL(
-                `${CONFIG.STAC_ROOT}/collections/${CONFIG.COLLECTION}/items`
+                CONFIG.STAC_ROOT +
+                "/collections/" +
+                CONFIG.COLLECTION +
+                "/items"
             );
 
-
-        /*
-         * The API may support id directly
-         * in a future version, but searching
-         * the collection is more portable.
-         *
-         * We therefore query the collection
-         * and look for the requested ID.
-         */
 
         url.searchParams.set(
             "limit",
@@ -1488,19 +2742,42 @@ async function loadTileFromURL() {
             );
 
 
-        const tile =
-            items
-                .map(normalizeTile)
-                .find(
-                    item =>
-                        item?.id === tileId
+        let tile =
+            null;
+
+
+        for (
+            let i = 0;
+            i < items.length;
+            i++
+        ) {
+
+            const candidate =
+                normalizeTile(
+                    items[i]
                 );
+
+
+            if (
+                candidate &&
+                candidate.id ===
+                    tileId
+            ) {
+
+                tile =
+                    candidate;
+
+                break;
+
+            }
+
+        }
 
 
         if (!tile) {
 
             setStatus(
-                "Shared tile was not found in the current catalogue."
+                "Shared tile was not found."
             );
 
             return;
@@ -1532,10 +2809,14 @@ async function loadTileFromURL() {
 
     } catch (error) {
 
-        console.error(error);
+        console.error(
+            error
+        );
+
 
         setStatus(
-            `Could not open shared tile: ${error.message}`
+            "Could not open shared tile: " +
+            error.message
         );
 
     }
@@ -1547,23 +2828,33 @@ async function loadTileFromURL() {
    EVENTS
    ========================================================= */
 
-document
-    .getElementById(
+const findTilesButton =
+    getElement(
         "findTilesButton"
-    )
-    .addEventListener(
+    );
+
+
+if (findTilesButton) {
+
+    findTilesButton.addEventListener(
         "click",
         findTiles
     );
 
+}
 
-document
-    .getElementById(
+
+const loadButton =
+    getElement(
         "load-button"
-    )
-    .addEventListener(
+    );
+
+
+if (loadButton) {
+
+    loadButton.addEventListener(
         "click",
-        async () => {
+        async function() {
 
             if (
                 state.selectedTile
@@ -1575,39 +2866,74 @@ document
 
             }
 
+
             await loadSelectedTile();
 
         }
     );
 
+}
 
-document
-    .getElementById(
+
+const unloadButton =
+    getElement(
         "unload-button"
-    )
-    .addEventListener(
+    );
+
+
+if (unloadButton) {
+
+    unloadButton.addEventListener(
         "click",
         unloadSelectedTile
     );
 
+}
 
-document
-    .getElementById(
+
+const downloadButton =
+    getElement(
+        "download-button"
+    );
+
+
+if (downloadButton) {
+
+    downloadButton.addEventListener(
+        "click",
+        downloadSelectedTile
+    );
+
+}
+
+
+const clearButton =
+    getElement(
         "clearButton"
-    )
-    .addEventListener(
+    );
+
+
+if (clearButton) {
+
+    clearButton.addEventListener(
         "click",
         clearAll
     );
 
+}
 
-document
-    .getElementById(
+
+const fitButton =
+    getElement(
         "fitButton"
-    )
-    .addEventListener(
+    );
+
+
+if (fitButton) {
+
+    fitButton.addEventListener(
         "click",
-        () => {
+        function() {
 
             viewer.fitToScreen(
                 0.5
@@ -1616,35 +2942,86 @@ document
         }
     );
 
+}
 
-document
-    .getElementById(
-        "search-button"
-    )
-    .addEventListener(
-        "click",
-        () => {
 
-            searchPlace(
-                document.getElementById(
-                    "search-input"
-                ).value
+/*
+ * Point color selector.
+ */
+
+const colorMode =
+    getElement(
+        "color-mode"
+    );
+
+
+if (colorMode) {
+
+    colorMode.addEventListener(
+        "change",
+        function(event) {
+
+            setAllPointCloudColorMode(
+                event.target.value
             );
 
         }
     );
 
+}
 
-document
-    .getElementById(
+
+/*
+ * Search.
+ */
+
+const searchButton =
+    getElement(
+        "search-button"
+    );
+
+
+if (searchButton) {
+
+    searchButton.addEventListener(
+        "click",
+        function() {
+
+            const input =
+                getElement(
+                    "search-input"
+                );
+
+
+            if (input) {
+
+                searchPlace(
+                    input.value
+                );
+
+            }
+
+        }
+    );
+
+}
+
+
+const searchInput =
+    getElement(
         "search-input"
-    )
-    .addEventListener(
+    );
+
+
+if (searchInput) {
+
+    searchInput.addEventListener(
         "keydown",
-        event => {
+        function(event) {
 
             if (
-                event.key === "Enter"
+                event.key ===
+                "Enter"
             ) {
 
                 searchPlace(
@@ -1656,16 +3033,20 @@ document
         }
     );
 
+}
+
 
 /*
  * Refresh tiles when map movement ends.
  */
 
-let moveTimer = null;
+let moveTimer =
+    null;
+
 
 map.on(
     "moveend",
-    () => {
+    function() {
 
         clearTimeout(
             moveTimer
@@ -1674,7 +3055,7 @@ map.on(
 
         moveTimer =
             setTimeout(
-                () => {
+                function() {
 
                     findTiles();
 
@@ -1690,7 +3071,7 @@ map.on(
    STARTUP
    ========================================================= */
 
-(async function init() {
+async function init() {
 
     setStatus(
         "Loading..."
@@ -1707,4 +3088,7 @@ map.on(
         "Ready."
     );
 
-})();
+}
+
+
+init();

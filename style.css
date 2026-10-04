@@ -1,14 +1,18 @@
+/* =========================================================
+   GLOBAL
+   ========================================================= */
+
 * {
     box-sizing: border-box;
 }
 
 html,
 body {
-    margin: 0;
-    padding: 0;
-
     width: 100%;
     height: 100%;
+
+    margin: 0;
+    padding: 0;
 
     overflow: hidden;
 
@@ -16,17 +20,32 @@ body {
         Arial,
         Helvetica,
         sans-serif;
+
+    background: #111;
 }
 
 body {
-    background: #111;
+    color: white;
 }
+
+button,
+input,
+select {
+    font-family: inherit;
+}
+
+
+/* =========================================================
+   APPLICATION
+   ========================================================= */
 
 #app {
     position: relative;
 
     width: 100%;
     height: 100%;
+
+    overflow: hidden;
 }
 
 
@@ -44,11 +63,13 @@ body {
     height: 100%;
 
     z-index: 1;
+
+    background: #ddd;
 }
 
 
 /* =========================================================
-   POTREE
+   POTREE CONTAINER
    ========================================================= */
 
 #potree-container {
@@ -66,8 +87,44 @@ body {
 }
 
 #potree_render_area {
+    position: absolute;
+
+    left: 0;
+    right: 0;
+    top: 0;
+    bottom: 0;
+
     width: 100%;
     height: 100%;
+
+    background: #111;
+}
+
+
+/* =========================================================
+   HIDE POTREE SIDEBAR
+   ========================================================= */
+
+#potree_sidebar_container {
+    display: none !important;
+}
+
+
+/*
+    Potree creates additional GUI elements if loadGUI()
+    is called.
+
+    app.js intentionally does NOT call viewer.loadGUI().
+
+    These rules provide an additional safeguard.
+*/
+
+.potree_sidebar {
+    display: none !important;
+}
+
+#potree_sidebar {
+    display: none !important;
 }
 
 
@@ -89,22 +146,32 @@ body {
     display: flex;
     align-items: center;
 
-    padding: 0 16px;
+    padding:
+        0 16px;
 
     background:
-        rgba(20, 20, 20, 0.92);
+        rgba(20, 20, 20, 0.94);
 
     color: white;
+
+    border:
+        1px solid rgba(255, 255, 255, 0.08);
 
     border-radius: 8px;
 
     box-shadow:
-        0 4px 20px rgba(0, 0, 0, 0.3);
+        0 4px 20px rgba(0, 0, 0, 0.35);
+
+    backdrop-filter:
+        blur(8px);
 }
 
 .brand {
     font-size: 18px;
+
     font-weight: 700;
+
+    white-space: nowrap;
 }
 
 .brand-subtitle {
@@ -113,13 +180,64 @@ body {
     font-size: 13px;
 
     color: #aaa;
+
+    white-space: nowrap;
 }
 
 .top-actions {
     margin-left: auto;
 
     display: flex;
+
     gap: 8px;
+}
+
+
+/* =========================================================
+   BUTTONS
+   ========================================================= */
+
+button {
+    height: 34px;
+
+    padding:
+        0 12px;
+
+    border: 0;
+
+    border-radius: 5px;
+
+    background: #444;
+
+    color: white;
+
+    cursor: pointer;
+
+    font-size: 12px;
+
+    font-weight: 600;
+
+    transition:
+        background 0.15s ease,
+        opacity 0.15s ease;
+}
+
+button:hover {
+    background: #555;
+}
+
+button:active {
+    background: #666;
+}
+
+button:disabled {
+    opacity: 0.4;
+
+    cursor: default;
+}
+
+button:disabled:hover {
+    background: #444;
 }
 
 
@@ -142,25 +260,41 @@ body {
 
     overflow: hidden;
 
+    display: flex;
+
+    flex-direction: column;
+
     background:
-        rgba(20, 20, 20, 0.94);
+        rgba(20, 20, 20, 0.95);
 
     color: white;
+
+    border:
+        1px solid rgba(255, 255, 255, 0.08);
 
     border-radius: 8px;
 
     box-shadow:
         0 4px 20px rgba(0, 0, 0, 0.35);
 
-    display: flex;
-    flex-direction: column;
+    backdrop-filter:
+        blur(8px);
 }
+
+
+/* =========================================================
+   PANEL HEADER
+   ========================================================= */
 
 .panel-header {
     display: flex;
+
     align-items: center;
 
-    padding: 12px 14px;
+    min-height: 44px;
+
+    padding:
+        10px 14px;
 
     border-bottom:
         1px solid #333;
@@ -170,16 +304,25 @@ body {
     margin: 0;
 
     font-size: 16px;
+
+    font-weight: 700;
 }
 
 #tile-count {
     margin-left: auto;
 
-    padding: 3px 8px;
+    min-width: 28px;
+
+    padding:
+        3px 8px;
+
+    text-align: center;
 
     border-radius: 12px;
 
     background: #444;
+
+    color: #ddd;
 
     font-size: 12px;
 }
@@ -195,19 +338,20 @@ body {
     gap: 6px;
 
     padding: 10px;
+
+    border-bottom:
+        1px solid #333;
 }
 
 #search-input {
     min-width: 0;
+
     flex: 1;
 
     height: 34px;
 
-    padding: 0 10px;
-
-    color: white;
-
-    background: #292929;
+    padding:
+        0 10px;
 
     border:
         1px solid #444;
@@ -215,43 +359,31 @@ body {
     border-radius: 5px;
 
     outline: none;
+
+    background: #292929;
+
+    color: white;
+
+    font-size: 13px;
+}
+
+#search-input::placeholder {
+    color: #888;
 }
 
 #search-input:focus {
     border-color: #777;
+
+    background: #303030;
 }
 
-button {
-    height: 34px;
-
-    padding:
-        0 12px;
-
-    border: 0;
-
-    border-radius: 5px;
-
-    background: #444;
-
-    color: white;
-
-    cursor: pointer;
-
-    font-weight: 600;
-}
-
-button:hover {
-    background: #555;
-}
-
-button:disabled {
-    opacity: 0.4;
-    cursor: default;
+#search-button {
+    flex-shrink: 0;
 }
 
 
 /* =========================================================
-   SEARCH RESULTS
+   PLACE SEARCH RESULTS
    ========================================================= */
 
 #search-results {
@@ -261,7 +393,8 @@ button:disabled {
 }
 
 .search-result {
-    padding: 8px 12px;
+    padding:
+        8px 12px;
 
     border-bottom:
         1px solid #333;
@@ -269,10 +402,24 @@ button:disabled {
     cursor: pointer;
 
     font-size: 13px;
+
+    line-height: 1.35;
 }
 
 .search-result:hover {
     background: #292929;
+}
+
+.search-result-title {
+    font-weight: 600;
+}
+
+.search-result-subtitle {
+    margin-top: 2px;
+
+    color: #999;
+
+    font-size: 11px;
 }
 
 
@@ -284,14 +431,18 @@ button:disabled {
     padding:
         10px 14px;
 
+    border-bottom:
+        1px solid #333;
+
     color: #bbb;
 
     font-size: 12px;
 
     line-height: 1.45;
+}
 
-    border-bottom:
-        1px solid #333;
+.help strong {
+    color: #ddd;
 }
 
 .help p {
@@ -305,11 +456,13 @@ button:disabled {
    ========================================================= */
 
 #tile-list {
-    overflow-y: auto;
-
     min-height: 0;
 
     flex: 1;
+
+    overflow-y: auto;
+
+    overscroll-behavior: contain;
 }
 
 .tile-row {
@@ -320,6 +473,9 @@ button:disabled {
         1px solid #292929;
 
     cursor: pointer;
+
+    transition:
+        background 0.12s ease;
 }
 
 .tile-row:hover {
@@ -333,10 +489,17 @@ button:disabled {
         inset 3px 0 0 #fff;
 }
 
+.tile-row.loaded {
+    background:
+        rgba(70, 100, 70, 0.35);
+}
+
 .tile-name {
     font-size: 13px;
 
     font-weight: 600;
+
+    line-height: 1.3;
 
     word-break: break-word;
 }
@@ -347,11 +510,13 @@ button:disabled {
     color: #999;
 
     font-size: 11px;
+
+    line-height: 1.35;
 }
 
 
 /* =========================================================
-   SELECTED PANEL
+   SELECTED TILE PANEL
    ========================================================= */
 
 #selected-panel {
@@ -364,23 +529,43 @@ button:disabled {
 
     width: 360px;
 
+    max-height:
+        calc(100% - 120px);
+
+    overflow-y: auto;
+
     padding: 12px;
 
     color: white;
 
     background:
-        rgba(20, 20, 20, 0.94);
+        rgba(20, 20, 20, 0.95);
+
+    border:
+        1px solid rgba(255, 255, 255, 0.08);
 
     border-radius: 8px;
 
     box-shadow:
         0 4px 20px rgba(0, 0, 0, 0.35);
+
+    backdrop-filter:
+        blur(8px);
 }
 
+
+/* =========================================================
+   SELECTED TITLE
+   ========================================================= */
+
 #selected-title {
+    font-size: 14px;
+
     font-weight: 700;
 
-    font-size: 14px;
+    line-height: 1.35;
+
+    word-break: break-word;
 }
 
 #selected-info {
@@ -395,12 +580,143 @@ button:disabled {
     word-break: break-word;
 }
 
+
+/* =========================================================
+   ATTRIBUTE PANEL
+   ========================================================= */
+
+.attribute-panel {
+    margin-top: 12px;
+
+    padding-top: 10px;
+
+    border-top:
+        1px solid #333;
+}
+
+.attribute-title {
+    margin-bottom: 7px;
+
+    color: #ddd;
+
+    font-size: 12px;
+
+    font-weight: 700;
+}
+
+#attribute-list {
+    color: #aaa;
+
+    font-size: 11px;
+
+    line-height: 1.45;
+}
+
+.attribute-row {
+    display: flex;
+
+    justify-content: space-between;
+
+    gap: 10px;
+
+    padding:
+        3px 0;
+
+    border-bottom:
+        1px solid rgba(255, 255, 255, 0.05);
+}
+
+.attribute-name {
+    color: #ccc;
+
+    word-break: break-word;
+}
+
+.attribute-value {
+    color: #888;
+
+    text-align: right;
+
+    word-break: break-word;
+}
+
+
+/* =========================================================
+   DISPLAY CONTROLS
+   ========================================================= */
+
+.display-controls {
+    margin-top: 12px;
+
+    padding-top: 10px;
+
+    border-top:
+        1px solid #333;
+}
+
+.control-label {
+    display: block;
+
+    margin-bottom: 5px;
+
+    color: #bbb;
+
+    font-size: 11px;
+
+    font-weight: 600;
+}
+
+#color-mode {
+    width: 100%;
+
+    height: 34px;
+
+    padding:
+        0 8px;
+
+    border:
+        1px solid #444;
+
+    border-radius: 5px;
+
+    outline: none;
+
+    background: #292929;
+
+    color: white;
+
+    font-size: 12px;
+
+    cursor: pointer;
+}
+
+#color-mode:focus {
+    border-color: #777;
+}
+
+
+/* =========================================================
+   SELECTED ACTIONS
+   ========================================================= */
+
 .selected-actions {
     display: flex;
 
     gap: 8px;
 
-    margin-top: 10px;
+    margin-top: 12px;
+}
+
+.selected-actions button {
+    flex: 1;
+}
+
+#download-button {
+    background: #3d4b5c;
+}
+
+#download-button:hover {
+    background: #4b5c70;
 }
 
 
@@ -417,19 +733,33 @@ button:disabled {
     right: 16px;
     bottom: 12px;
 
-    height: 32px;
+    min-height: 32px;
 
     padding:
         8px 12px;
+
+    overflow: hidden;
 
     background:
         rgba(20, 20, 20, 0.94);
 
     color: #ccc;
 
+    border:
+        1px solid rgba(255, 255, 255, 0.08);
+
     border-radius: 5px;
 
     font-size: 12px;
+
+    line-height: 1.35;
+
+    white-space: nowrap;
+
+    text-overflow: ellipsis;
+
+    box-shadow:
+        0 4px 15px rgba(0, 0, 0, 0.25);
 }
 
 
@@ -441,9 +771,48 @@ button:disabled {
     font-size: 10px;
 }
 
+.leaflet-control-zoom a {
+    background: rgba(255, 255, 255, 0.92);
+}
+
+.leaflet-popup-content {
+    font-size: 12px;
+}
+
 
 /* =========================================================
-   MOBILE
+   SCROLLBARS
+   ========================================================= */
+
+#tile-list::-webkit-scrollbar,
+#search-results::-webkit-scrollbar,
+#selected-panel::-webkit-scrollbar {
+    width: 7px;
+}
+
+#tile-list::-webkit-scrollbar-track,
+#search-results::-webkit-scrollbar-track,
+#selected-panel::-webkit-scrollbar-track {
+    background: #191919;
+}
+
+#tile-list::-webkit-scrollbar-thumb,
+#search-results::-webkit-scrollbar-thumb,
+#selected-panel::-webkit-scrollbar-thumb {
+    background: #444;
+
+    border-radius: 4px;
+}
+
+#tile-list::-webkit-scrollbar-thumb:hover,
+#search-results::-webkit-scrollbar-thumb:hover,
+#selected-panel::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+
+/* =========================================================
+   MOBILE / SMALL SCREENS
    ========================================================= */
 
 @media (max-width: 900px) {
@@ -453,6 +822,7 @@ button:disabled {
         height: 45%;
     }
 
+
     #potree-container {
         top: 45%;
 
@@ -460,48 +830,100 @@ button:disabled {
         height: 55%;
     }
 
-    #tile-panel {
-        width: 300px;
-
-        max-height: 35%;
-    }
-
-    #selected-panel {
-        width: 300px;
-
-        bottom: 42%;
-    }
 
     #topbar {
-        right: 8px;
         left: 8px;
+        right: 8px;
         top: 8px;
+
+        height: 46px;
+
+        padding:
+            0 10px;
     }
+
+
+    .brand {
+        font-size: 15px;
+    }
+
 
     .brand-subtitle {
         display: none;
     }
+
+
+    .top-actions {
+        gap: 4px;
+    }
+
+
+    .top-actions button {
+        padding:
+            0 8px;
+
+        font-size: 11px;
+    }
+
+
+    #tile-panel {
+        left: 8px;
+        top: 62px;
+
+        width: 300px;
+
+        max-height: 34%;
+    }
+
+
+    #selected-panel {
+        left: 8px;
+        bottom: calc(55% + 8px);
+
+        width: 300px;
+
+        max-height: 34%;
+    }
+
+
+    #status {
+        left: 8px;
+        right: 8px;
+        bottom: 8px;
+    }
+
 }
 
-.display-controls {
-    margin-top: 10px;
-}
 
-.display-controls label {
-    display: block;
-    margin-bottom: 5px;
-    color: #aaa;
-    font-size: 11px;
-}
+/* =========================================================
+   VERY SMALL SCREENS
+   ========================================================= */
 
-#color-mode {
-    width: 100%;
-    height: 32px;
-    padding: 0 8px;
+@media (max-width: 600px) {
 
-    color: white;
-    background: #292929;
+    #tile-panel {
+        width: calc(100% - 16px);
 
-    border: 1px solid #444;
-    border-radius: 5px;
+        max-height: 31%;
+    }
+
+
+    #selected-panel {
+        width: calc(100% - 16px);
+
+        bottom: calc(55% + 8px);
+
+        max-height: 31%;
+    }
+
+
+    .selected-actions {
+        flex-wrap: wrap;
+    }
+
+
+    .selected-actions button {
+        min-width: 80px;
+    }
+
 }

@@ -940,49 +940,38 @@ async function loadSelectedTile() {
    CONFIGURE POINT CLOUD
    ========================================================= */
 
-function configurePointCloud(
-    pointcloud
-) {
+   function configurePointCloud(pointcloud) {
 
-    const material =
-        pointcloud.material;
+       var material = pointcloud.material;
 
+       // Point size
+       material.size = 1;
+       material.minSize = 2;
 
-    material.size =
-        1;
+       // Adaptive point sizing
+       material.pointSizeType =
+           Potree.PointSizeType.ADAPTIVE;
 
+       // Square points
+       material.shape =
+           Potree.PointShape.SQUARE;
 
-    material.minSize =
-        2;
+       /*
+        * Start with RGB.
+        */
+       material.activeAttributeName = "rgba";
 
+       /*
+        * Let Potree use the full point-cloud range.
+        */
+       material.opacity = 1.0;
 
-    material.pointSizeType =
-        Potree.PointSizeType.ADAPTIVE;
+       /*
+        * Improve visibility.
+        */
+       material.size = 1.5;
 
-
-    material.shape =
-        Potree.PointShape.SQUARE;
-
-
-    /*
-     * RGB is preferred when available.
-     */
-
-    try {
-
-        material.activeAttributeName =
-            "rgba";
-
-    } catch {
-
-        /*
-         * Some datasets may not expose RGB.
-         */
-
-    }
-
-}
-
+   }
 
 /* =========================================================
    UNLOAD SELECTED

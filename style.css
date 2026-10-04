@@ -22,9 +22,7 @@ body {
         sans-serif;
 
     background: #111;
-}
 
-body {
     color: white;
 }
 
@@ -36,7 +34,7 @@ select {
 
 
 /* =========================================================
-   APPLICATION
+   APP
    ========================================================= */
 
 #app {
@@ -50,35 +48,16 @@ select {
 
 
 /* =========================================================
-   MAP
-   ========================================================= */
-
-#map {
-    position: absolute;
-
-    left: 0;
-    top: 0;
-
-    width: 42%;
-    height: 100%;
-
-    z-index: 1;
-
-    background: #ddd;
-}
-
-
-/* =========================================================
-   POTREE CONTAINER
+   POTREE
    ========================================================= */
 
 #potree-container {
     position: absolute;
 
-    right: 0;
+    left: 0;
     top: 0;
 
-    width: 58%;
+    width: 100%;
     height: 100%;
 
     z-index: 1;
@@ -102,29 +81,51 @@ select {
 
 
 /* =========================================================
-   HIDE POTREE SIDEBAR
+   HIDE POTREE GUI
    ========================================================= */
 
 #potree_sidebar_container {
     display: none !important;
 }
 
-
-/*
-    Potree creates additional GUI elements if loadGUI()
-    is called.
-
-    app.js intentionally does NOT call viewer.loadGUI().
-
-    These rules provide an additional safeguard.
-*/
+#potree_sidebar {
+    display: none !important;
+}
 
 .potree_sidebar {
     display: none !important;
 }
 
-#potree_sidebar {
-    display: none !important;
+
+/* =========================================================
+   MAP
+   ========================================================= */
+
+#map {
+    position: absolute;
+
+    left: 16px;
+    top: 16px;
+
+    width: 40%;
+    height: 40%;
+
+    min-width: 280px;
+    min-height: 220px;
+
+    z-index: 900;
+
+    background: #ddd;
+
+    border:
+        2px solid rgba(255, 255, 255, 0.9);
+
+    border-radius: 8px;
+
+    overflow: hidden;
+
+    box-shadow:
+        0 6px 25px rgba(0, 0, 0, 0.45);
 }
 
 
@@ -141,7 +142,7 @@ select {
 
     height: 54px;
 
-    z-index: 1000;
+    z-index: 1100;
 
     display: flex;
     align-items: center;
@@ -151,8 +152,6 @@ select {
 
     background:
         rgba(20, 20, 20, 0.94);
-
-    color: white;
 
     border:
         1px solid rgba(255, 255, 255, 0.08);
@@ -170,18 +169,14 @@ select {
     font-size: 18px;
 
     font-weight: 700;
-
-    white-space: nowrap;
 }
 
 .brand-subtitle {
     margin-left: 10px;
 
-    font-size: 13px;
-
     color: #aaa;
 
-    white-space: nowrap;
+    font-size: 13px;
 }
 
 .top-actions {
@@ -236,10 +231,6 @@ button:disabled {
     cursor: default;
 }
 
-button:disabled:hover {
-    background: #444;
-}
-
 
 /* =========================================================
    TILE PANEL
@@ -248,26 +239,25 @@ button:disabled:hover {
 #tile-panel {
     position: absolute;
 
-    z-index: 1000;
-
     left: 16px;
-    top: 86px;
+
+    top: calc(40% + 28px);
 
     width: 360px;
 
     max-height:
-        calc(100% - 180px);
+        calc(60% - 70px);
 
-    overflow: hidden;
+    z-index: 1000;
 
     display: flex;
 
     flex-direction: column;
 
-    background:
-        rgba(20, 20, 20, 0.95);
+    overflow: hidden;
 
-    color: white;
+    background:
+        rgba(20, 20, 20, 0.96);
 
     border:
         1px solid rgba(255, 255, 255, 0.08);
@@ -275,7 +265,7 @@ button:disabled:hover {
     border-radius: 8px;
 
     box-shadow:
-        0 4px 20px rgba(0, 0, 0, 0.35);
+        0 5px 25px rgba(0, 0, 0, 0.4);
 
     backdrop-filter:
         blur(8px);
@@ -304,19 +294,13 @@ button:disabled:hover {
     margin: 0;
 
     font-size: 16px;
-
-    font-weight: 700;
 }
 
 #tile-count {
     margin-left: auto;
 
-    min-width: 28px;
-
     padding:
         3px 8px;
-
-    text-align: center;
 
     border-radius: 12px;
 
@@ -344,9 +328,9 @@ button:disabled:hover {
 }
 
 #search-input {
-    min-width: 0;
-
     flex: 1;
+
+    min-width: 0;
 
     height: 34px;
 
@@ -373,21 +357,15 @@ button:disabled:hover {
 
 #search-input:focus {
     border-color: #777;
-
-    background: #303030;
-}
-
-#search-button {
-    flex-shrink: 0;
 }
 
 
 /* =========================================================
-   PLACE SEARCH RESULTS
+   SEARCH RESULTS
    ========================================================= */
 
 #search-results {
-    max-height: 160px;
+    max-height: 140px;
 
     overflow-y: auto;
 }
@@ -402,24 +380,10 @@ button:disabled:hover {
     cursor: pointer;
 
     font-size: 13px;
-
-    line-height: 1.35;
 }
 
 .search-result:hover {
     background: #292929;
-}
-
-.search-result-title {
-    font-weight: 600;
-}
-
-.search-result-subtitle {
-    margin-top: 2px;
-
-    color: #999;
-
-    font-size: 11px;
 }
 
 
@@ -434,11 +398,11 @@ button:disabled:hover {
     border-bottom:
         1px solid #333;
 
-    color: #bbb;
+    color: #aaa;
 
-    font-size: 12px;
+    font-size: 11px;
 
-    line-height: 1.45;
+    line-height: 1.4;
 }
 
 .help strong {
@@ -447,7 +411,7 @@ button:disabled:hover {
 
 .help p {
     margin:
-        6px 0 0;
+        5px 0 0;
 }
 
 
@@ -461,8 +425,6 @@ button:disabled:hover {
     flex: 1;
 
     overflow-y: auto;
-
-    overscroll-behavior: contain;
 }
 
 .tile-row {
@@ -473,9 +435,6 @@ button:disabled:hover {
         1px solid #292929;
 
     cursor: pointer;
-
-    transition:
-        background 0.12s ease;
 }
 
 .tile-row:hover {
@@ -486,12 +445,12 @@ button:disabled:hover {
     background: #3a3a3a;
 
     box-shadow:
-        inset 3px 0 0 #fff;
+        inset 3px 0 0 white;
 }
 
 .tile-row.loaded {
     background:
-        rgba(70, 100, 70, 0.35);
+        rgba(60, 100, 70, 0.35);
 }
 
 .tile-name {
@@ -522,24 +481,23 @@ button:disabled:hover {
 #selected-panel {
     position: absolute;
 
-    z-index: 1000;
+    left: 392px;
 
-    left: 16px;
     bottom: 54px;
 
-    width: 360px;
+    width: 380px;
 
     max-height:
-        calc(100% - 120px);
+        calc(100% - 100px);
 
     overflow-y: auto;
 
-    padding: 12px;
+    z-index: 1000;
 
-    color: white;
+    padding: 14px;
 
     background:
-        rgba(20, 20, 20, 0.95);
+        rgba(20, 20, 20, 0.96);
 
     border:
         1px solid rgba(255, 255, 255, 0.08);
@@ -547,7 +505,7 @@ button:disabled:hover {
     border-radius: 8px;
 
     box-shadow:
-        0 4px 20px rgba(0, 0, 0, 0.35);
+        0 5px 25px rgba(0, 0, 0, 0.4);
 
     backdrop-filter:
         blur(8px);
@@ -563,15 +521,15 @@ button:disabled:hover {
 
     font-weight: 700;
 
-    line-height: 1.35;
+    line-height: 1.3;
 
     word-break: break-word;
 }
 
 #selected-info {
-    margin-top: 6px;
+    margin-top: 5px;
 
-    color: #aaa;
+    color: #999;
 
     font-size: 11px;
 
@@ -582,20 +540,11 @@ button:disabled:hover {
 
 
 /* =========================================================
-   ATTRIBUTE PANEL
+   SECTION HEADINGS
    ========================================================= */
 
-.attribute-panel {
-    margin-top: 12px;
-
-    padding-top: 10px;
-
-    border-top:
-        1px solid #333;
-}
-
-.attribute-title {
-    margin-bottom: 7px;
+.section-heading {
+    margin-bottom: 8px;
 
     color: #ddd;
 
@@ -604,26 +553,45 @@ button:disabled:hover {
     font-weight: 700;
 }
 
+
+/* =========================================================
+   ATTRIBUTES
+   ========================================================= */
+
+.attribute-panel {
+    margin-top: 13px;
+
+    padding-top: 11px;
+
+    border-top:
+        1px solid #333;
+}
+
 #attribute-list {
-    color: #aaa;
+    display: flex;
 
-    font-size: 11px;
+    flex-direction: column;
 
-    line-height: 1.45;
+    gap: 4px;
 }
 
 .attribute-row {
-    display: flex;
+    display: grid;
 
-    justify-content: space-between;
+    grid-template-columns:
+        1fr auto;
 
     gap: 10px;
 
     padding:
-        3px 0;
+        4px 7px;
 
-    border-bottom:
-        1px solid rgba(255, 255, 255, 0.05);
+    background:
+        rgba(255, 255, 255, 0.035);
+
+    border-radius: 4px;
+
+    font-size: 11px;
 }
 
 .attribute-name {
@@ -637,18 +605,24 @@ button:disabled:hover {
 
     text-align: right;
 
-    word-break: break-word;
+    white-space: nowrap;
+}
+
+.attribute-empty {
+    color: #777;
+
+    font-size: 11px;
 }
 
 
 /* =========================================================
-   DISPLAY CONTROLS
+   DISPLAY
    ========================================================= */
 
-.display-controls {
-    margin-top: 12px;
+.display-section {
+    margin-top: 13px;
 
-    padding-top: 10px;
+    padding-top: 11px;
 
     border-top:
         1px solid #333;
@@ -659,17 +633,15 @@ button:disabled:hover {
 
     margin-bottom: 5px;
 
-    color: #bbb;
+    color: #999;
 
     font-size: 11px;
-
-    font-weight: 600;
 }
 
 #color-mode {
     width: 100%;
 
-    height: 34px;
+    height: 35px;
 
     padding:
         0 8px;
@@ -690,33 +662,68 @@ button:disabled:hover {
     cursor: pointer;
 }
 
-#color-mode:focus {
-    border-color: #777;
+
+/* =========================================================
+   SECTION TOOLS
+   ========================================================= */
+
+.section-tools {
+    margin-top: 13px;
+
+    padding-top: 11px;
+
+    border-top:
+        1px solid #333;
+}
+
+.section-buttons {
+    display: grid;
+
+    grid-template-columns:
+        1fr 1fr 1fr;
+
+    gap: 6px;
+}
+
+.section-buttons button {
+    padding:
+        0 6px;
+
+    font-size: 11px;
+}
+
+.section-info {
+    margin-top: 7px;
+
+    color: #777;
+
+    font-size: 10px;
+
+    line-height: 1.4;
 }
 
 
 /* =========================================================
-   SELECTED ACTIONS
+   ACTIONS
    ========================================================= */
 
 .selected-actions {
-    display: flex;
+    display: grid;
 
-    gap: 8px;
+    grid-template-columns:
+        1fr 1fr 1fr;
 
-    margin-top: 12px;
-}
+    gap: 7px;
 
-.selected-actions button {
-    flex: 1;
+    margin-top: 13px;
 }
 
 #download-button {
-    background: #3d4b5c;
+    background: #3c4d60;
 }
 
 #download-button:hover {
-    background: #4b5c70;
+    background: #4b6078;
 }
 
 
@@ -727,13 +734,13 @@ button:disabled:hover {
 #status {
     position: absolute;
 
-    z-index: 2000;
-
     left: 16px;
     right: 16px;
     bottom: 12px;
 
     min-height: 32px;
+
+    z-index: 2000;
 
     padding:
         8px 12px;
@@ -741,25 +748,20 @@ button:disabled:hover {
     overflow: hidden;
 
     background:
-        rgba(20, 20, 20, 0.94);
-
-    color: #ccc;
+        rgba(20, 20, 20, 0.95);
 
     border:
         1px solid rgba(255, 255, 255, 0.08);
 
     border-radius: 5px;
 
-    font-size: 12px;
+    color: #ccc;
 
-    line-height: 1.35;
+    font-size: 12px;
 
     white-space: nowrap;
 
     text-overflow: ellipsis;
-
-    box-shadow:
-        0 4px 15px rgba(0, 0, 0, 0.25);
 }
 
 
@@ -768,15 +770,7 @@ button:disabled:hover {
    ========================================================= */
 
 .leaflet-control-attribution {
-    font-size: 10px;
-}
-
-.leaflet-control-zoom a {
-    background: rgba(255, 255, 255, 0.92);
-}
-
-.leaflet-popup-content {
-    font-size: 12px;
+    font-size: 9px;
 }
 
 
@@ -804,30 +798,22 @@ button:disabled:hover {
     border-radius: 4px;
 }
 
-#tile-list::-webkit-scrollbar-thumb:hover,
-#search-results::-webkit-scrollbar-thumb:hover,
-#selected-panel::-webkit-scrollbar-thumb:hover {
-    background: #555;
-}
-
 
 /* =========================================================
-   MOBILE / SMALL SCREENS
+   MOBILE
    ========================================================= */
 
 @media (max-width: 900px) {
 
     #map {
-        width: 100%;
-        height: 45%;
-    }
+        left: 8px;
+        top: 62px;
 
+        width: 42%;
+        height: 35%;
 
-    #potree-container {
-        top: 45%;
-
-        width: 100%;
-        height: 55%;
+        min-width: 220px;
+        min-height: 180px;
     }
 
 
@@ -862,27 +848,31 @@ button:disabled:hover {
         padding:
             0 8px;
 
-        font-size: 11px;
+        font-size: 10px;
     }
 
 
     #tile-panel {
         left: 8px;
-        top: 62px;
+
+        top: calc(35% + 70px);
 
         width: 300px;
 
-        max-height: 34%;
+        max-height:
+            calc(65% - 95px);
     }
 
 
     #selected-panel {
-        left: 8px;
-        bottom: calc(55% + 8px);
+        left: auto;
+        right: 8px;
 
-        width: 300px;
+        bottom: 50px;
 
-        max-height: 34%;
+        width: 310px;
+
+        max-height: 45%;
     }
 
 
@@ -895,35 +885,38 @@ button:disabled:hover {
 }
 
 
-/* =========================================================
-   VERY SMALL SCREENS
-   ========================================================= */
+@media (max-width: 650px) {
 
-@media (max-width: 600px) {
-
-    #tile-panel {
+    #map {
         width: calc(100% - 16px);
 
-        max-height: 31%;
+        height: 34%;
+
+        min-width: 0;
+    }
+
+
+    #tile-panel {
+        left: 8px;
+        right: 8px;
+
+        width: auto;
+
+        top: calc(34% + 65px);
+
+        max-height: 28%;
     }
 
 
     #selected-panel {
-        width: calc(100% - 16px);
+        left: 8px;
+        right: 8px;
 
-        bottom: calc(55% + 8px);
+        width: auto;
 
-        max-height: 31%;
-    }
+        bottom: 48px;
 
-
-    .selected-actions {
-        flex-wrap: wrap;
-    }
-
-
-    .selected-actions button {
-        min-width: 80px;
+        max-height: 34%;
     }
 
 }

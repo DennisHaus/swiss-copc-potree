@@ -1,12 +1,18 @@
-/* ============================================================
-   SwissTopo swissSURFACE3D COPC + Potree 1.8
-   ============================================================ */
-
 "use strict";
 
-/* ------------------------------------------------------------
-   Global state
-   ------------------------------------------------------------ */
+/*
+ * SwissTopo swissSURFACE3D COPC viewer
+ * Potree 1.8
+ *
+ * IMPORTANT:
+ * Do not define a global "$()" helper here.
+ * Potree uses jQuery's "$()" internally.
+ */
+
+
+/* ============================================================
+   GLOBAL STATE
+   ============================================================ */
 
 let viewer = null;
 let map = null;
@@ -22,23 +28,33 @@ let currentSection = null;
 const loadedPointClouds = new Map();
 
 
-/* ------------------------------------------------------------
-   DOM helpers
-   ------------------------------------------------------------ */
+/* ============================================================
+   DOM HELPER
+   ============================================================ */
 
-function $(id) {
+function getEl(id) {
     return document.getElementById(id);
 }
 
-function setStatus(message) {
-    const el = $("status");
 
-    if (el) {
-        el.textContent = message || "";
+/* ============================================================
+   STATUS
+   ============================================================ */
+
+function setStatus(message) {
+    const element = getEl("status");
+
+    if (element) {
+        element.textContent = message || "";
     }
 
     console.log("[swiss-copc]", message);
 }
+
+
+/* ============================================================
+   HTML ESCAPING
+   ============================================================ */
 
 function escapeHtml(value) {
     return String(value ?? "")
@@ -50,9 +66,9 @@ function escapeHtml(value) {
 }
 
 
-/* ------------------------------------------------------------
-   Initialization
-   ------------------------------------------------------------ */
+/* ============================================================
+   INITIALIZATION
+   ============================================================ */
 
 document.addEventListener("DOMContentLoaded", () => {
     initPotree();
@@ -63,188 +79,287 @@ document.addEventListener("DOMContentLoaded", () => {
 });
 
 
-/* ------------------------------------------------------------
-   Potree
-   ------------------------------------------------------------ */
+/* ============================================================
+   POTREE INITIALIZATION
+   ============================================================ */
 
-   function initPotree() {
-       const renderArea = $("potree_render_area");
+function initPotree() {
+    const renderArea = getEl(
+        "potree_render_area"
+    );
 
-       if (!renderArea) {
-           console.error("Missing #potree_render_area");
-           return;
-       }
+    if (!renderArea) {
+        console.error(
+            "Missing #potree_render_area"
+        );
+        return;
+    }
 
-       /*
-        * Potree 1.8 expects the DOM element ID here,
-        * not the DOM element itself.
-        */
-       viewer = new Potree.Viewer(
-           "potree_render_area"
-       );
+    /*
+     * IMPORTANT:
+     *
+     * Your Potree 1.8 build expects the actual DOM
+     * element here.
+     *
+     * We intentionally DO NOT define our own "$()"
+     * function because Potree needs jQuery's "$()".
+     */
+    viewer = new Potree.Viewer(
+        renderArea
+    );
 
-       viewer.setEDLEnabled(true);
-       viewer.setFOV(60);
-       viewer.setPointBudget(
-           CONFIG.POINT_BUDGET || 2_000_000
-       );
+    viewer.setEDLEnabled(true);
 
-       /*
-        * Do NOT call viewer.loadGUI().
-        * We are using our own controls.
-        */
+    viewer.setFOV(60);
 
-       if (viewer.renderer) {
-           viewer.renderer.setClearColor(
-               0x20252b,
-               1
-           );
-       }
+    viewer.setPointBudget(
+        CONFIG.POINT_BUDGET || 2000000
+    );
 
-       try {
-           viewer.setClipTask(
-               Potree.ClipTask.NONE
-           );
-       } catch (error) {
-           console.warn(
-               "Could not set initial clip task:",
-               error
-           );
-       }
-   }
+    /*
+     * We intentionally do not call:
+     *
+     * viewer.loadGUI();
+     *
+     * because the project uses its own interface.
+     */
+
+    try {
+        viewer.setClipTask(
+            Potree.ClipTask.NONE
+        );
+    } catch (error) {
+        console.warn(
+            "Could not set initial clip task:",
+            error
+        );
+    }
+}
 
 
-/* ------------------------------------------------------------
-   Leaflet map
-   ------------------------------------------------------------ */
+/* ============================================================
+   LEAFLET MAP
+   ============================================================ */
 
 function initMap() {
     if (!window.L) {
-        console.warn("Leaflet not available");
+        console.warn(
+            "Leaflet is not available."
+        );
         return;
     }
 
-    const mapElement = $("map");
+    const mapElement = getEl("map");
 
     if (!mapElement) {
+        console.warn(
+            "Missing #map."
+        );
         return;
     }
 
-    map = L.map(mapElement, {
-        zoomControl: true,
-        attributionControl: true
-    }).setView(
-        CONFIG.MAP_CENTER || [46.8182, 8.2275],
+    map = L.map(
+        mapElement,
+        {
+            zoomControl: true,
+            attributionControl: true
+        }
+    ).setView(
+        CONFIG.MAP_CENTER || [
+            46.8182,
+            8.2275
+        ],
         CONFIG.MAP_ZOOM || 8
     );
 
-    L.tileLayer(CONFIG.BASEMAP, {
-        attribution: CONFIG.BASEMAP_ATTRIBUTION || "© swisstopo",
-        maxZoom: 19
-    }).addTo(map);
+    L.tileLayer(
+        CONFIG.BASEMAP,
+        {
+            attribution:
+                CONFIG.BASEMAP_ATTRIBUTION ||
+                "© swisstopo",
 
-    tileLayerGroup = L.layerGroup().addTo(map);
+            maxZoom: 19
+        }
+    ).addTo(map);
 
-    /*
-     * Make sure Leaflet recalculates its size after the UI is
-     * completely laid out.
-     */
+    tileLayerGroup =
+        L.layerGroup().addTo(map);
+
     setTimeout(() => {
         map.invalidateSize();
-    }, 250);
+    }, 300);
 }
 
 
-/* ------------------------------------------------------------
-   UI
-   ------------------------------------------------------------ */
+/* ============================================================
+   UI INITIALIZATION
+   ============================================================ */
 
 function initUI() {
-    const findButton = $("findTilesButton");
-    const fitButton = $("fitButton");
-    const clearButton = $("clearButton");
+    const findButton =
+        getEl("findTilesButton");
 
-    const searchButton = $("search-button");
-    const searchInput = $("search-input");
+    const fitButton =
+        getEl("fitButton");
 
-    const colorMode = $("color-mode");
+    const clearButton =
+        getEl("clearButton");
 
-    const horizontalButton = $("horizontalSectionButton");
-    const verticalButton = $("verticalSectionButton");
-    const clearSectionButton = $("clearSectionButton");
+    const searchButton =
+        getEl("search-button");
 
-    const unloadButton = $("unloadButton");
-    const downloadButton = $("downloadButton");
+    const searchInput =
+        getEl("search-input");
+
+    const colorMode =
+        getEl("color-mode");
+
+    const horizontalButton =
+        getEl(
+            "horizontalSectionButton"
+        );
+
+    const verticalButton =
+        getEl(
+            "verticalSectionButton"
+        );
+
+    const clearSectionButton =
+        getEl(
+            "clearSectionButton"
+        );
+
+    const unloadButton =
+        getEl("unloadButton");
+
+    const downloadButton =
+        getEl("downloadButton");
+
 
     if (findButton) {
-        findButton.addEventListener("click", findTilesFromMap);
+        findButton.addEventListener(
+            "click",
+            findTilesFromMap
+        );
     }
+
 
     if (fitButton) {
-        fitButton.addEventListener("click", fitCurrentPointCloud);
+        fitButton.addEventListener(
+            "click",
+            fitCurrentPointCloud
+        );
     }
+
 
     if (clearButton) {
-        clearButton.addEventListener("click", clearAllPointClouds);
+        clearButton.addEventListener(
+            "click",
+            clearAllPointClouds
+        );
     }
+
 
     if (searchButton) {
-        searchButton.addEventListener("click", searchPlace);
+        searchButton.addEventListener(
+            "click",
+            searchPlace
+        );
     }
+
 
     if (searchInput) {
-        searchInput.addEventListener("keydown", event => {
-            if (event.key === "Enter") {
-                searchPlace();
+        searchInput.addEventListener(
+            "keydown",
+            event => {
+                if (event.key === "Enter") {
+                    searchPlace();
+                }
             }
-        });
+        );
     }
+
 
     if (colorMode) {
-        colorMode.addEventListener("change", () => {
-            if (currentPointCloud) {
-                applyColorMode(currentPointCloud, colorMode.value);
+        colorMode.addEventListener(
+            "change",
+            () => {
+                if (currentPointCloud) {
+                    applyColorMode(
+                        currentPointCloud,
+                        colorMode.value
+                    );
+                }
             }
-        });
+        );
     }
+
 
     if (horizontalButton) {
-        horizontalButton.addEventListener("click", () => {
-            createSection("horizontal");
-        });
+        horizontalButton.addEventListener(
+            "click",
+            () => {
+                createSection(
+                    "horizontal"
+                );
+            }
+        );
     }
+
 
     if (verticalButton) {
-        verticalButton.addEventListener("click", () => {
-            createSection("vertical");
-        });
+        verticalButton.addEventListener(
+            "click",
+            () => {
+                createSection(
+                    "vertical"
+                );
+            }
+        );
     }
+
 
     if (clearSectionButton) {
-        clearSectionButton.addEventListener("click", clearSection);
+        clearSectionButton.addEventListener(
+            "click",
+            clearSection
+        );
     }
+
 
     if (unloadButton) {
-        unloadButton.addEventListener("click", unloadCurrentPointCloud);
+        unloadButton.addEventListener(
+            "click",
+            unloadCurrentPointCloud
+        );
     }
 
+
     if (downloadButton) {
-        downloadButton.addEventListener("click", downloadCurrentTile);
+        downloadButton.addEventListener(
+            "click",
+            downloadCurrentTile
+        );
     }
 }
 
 
-/* ------------------------------------------------------------
-   STAC
-   ------------------------------------------------------------ */
+/* ============================================================
+   STAC TILE SEARCH
+   ============================================================ */
 
 async function findTilesFromMap() {
     if (!map) {
-        setStatus("Map is not available.");
+        setStatus(
+            "Map is not available."
+        );
+
         return;
     }
 
-    const bounds = map.getBounds();
+    const bounds =
+        map.getBounds();
 
     const bbox = [
         bounds.getWest(),
@@ -253,7 +368,9 @@ async function findTilesFromMap() {
         bounds.getNorth()
     ];
 
-    setStatus("Searching swissSURFACE3D tiles…");
+    setStatus(
+        "Searching swissSURFACE3D tiles…"
+    );
 
     try {
         const url = new URL(
@@ -275,7 +392,8 @@ async function findTilesFromMap() {
             CONFIG.MAX_TILES || 200
         );
 
-        const response = await fetch(url);
+        const response =
+            await fetch(url);
 
         if (!response.ok) {
             throw new Error(
@@ -283,17 +401,22 @@ async function findTilesFromMap() {
             );
         }
 
-        const data = await response.json();
+        const data =
+            await response.json();
 
-        currentTiles = Array.isArray(data.features)
-            ? data.features
-            : [];
+        currentTiles =
+            Array.isArray(
+                data.features
+            )
+                ? data.features
+                : [];
 
         renderTiles();
 
         setStatus(
             `${currentTiles.length} tile(s) found.`
         );
+
     } catch (error) {
         console.error(error);
 
@@ -304,60 +427,98 @@ async function findTilesFromMap() {
 }
 
 
-/* ------------------------------------------------------------
-   Tile rendering
-   ------------------------------------------------------------ */
+/* ============================================================
+   RENDER TILE RESULTS
+   ============================================================ */
 
 function renderTiles() {
-    const list = $("tile-list");
-    const count = $("tile-count");
+    const list =
+        getEl("tile-list");
+
+    const count =
+        getEl("tile-count");
+
 
     if (list) {
         list.innerHTML = "";
     }
 
+
     if (count) {
-        count.textContent = String(currentTiles.length);
+        count.textContent =
+            String(
+                currentTiles.length
+            );
     }
+
 
     if (tileLayerGroup) {
         tileLayerGroup.clearLayers();
     }
 
-    currentTiles.forEach((tile, index) => {
-        renderTileOnMap(tile, index);
-        renderTileInList(tile, index);
-    });
+
+    currentTiles.forEach(
+        (tile, index) => {
+            renderTileOnMap(
+                tile,
+                index
+            );
+
+            renderTileInList(
+                tile,
+                index
+            );
+        }
+    );
 }
 
 
-function renderTileOnMap(tile, index) {
-    if (!map || !tileLayerGroup) {
+/* ============================================================
+   TILE FOOTPRINT ON MAP
+   ============================================================ */
+
+function renderTileOnMap(
+    tile,
+    index
+) {
+    if (
+        !map ||
+        !tileLayerGroup
+    ) {
         return;
     }
 
-    const geometry = tile.geometry;
+    const geometry =
+        tile.geometry;
 
     if (!geometry) {
         return;
     }
 
-    let layer = null;
-
     try {
-        layer = L.geoJSON(geometry, {
-            style: {
-                color: "#00ffff",
-                weight: 1,
-                fillOpacity: 0.05
+        const layer =
+            L.geoJSON(
+                geometry,
+                {
+                    style: {
+                        color: "#00ffff",
+                        weight: 1,
+                        fillOpacity: 0.05
+                    }
+                }
+            );
+
+        layer.on(
+            "click",
+            () => {
+                selectTile(tile);
             }
-        });
+        );
 
-        layer.on("click", () => {
-            selectTile(tile);
-        });
+        layer.addTo(
+            tileLayerGroup
+        );
 
-        layer.addTo(tileLayerGroup);
     } catch (error) {
         console.warn(
             "Could not render tile footprint:",
@@ -367,36 +528,53 @@ function renderTileOnMap(tile, index) {
 }
 
 
-function renderTileInList(tile, index) {
-    const list = $("tile-list");
+/* ============================================================
+   TILE LIST
+   ============================================================ */
+
+function renderTileInList(
+    tile,
+    index
+) {
+    const list =
+        getEl("tile-list");
 
     if (!list) {
         return;
     }
 
-    const item = document.createElement("button");
+    const item =
+        document.createElement(
+            "button"
+        );
 
     item.type = "button";
-    item.className = "tile-item";
+
+    item.className =
+        "tile-item";
 
     const name =
         tile.properties?.title ||
         tile.id ||
         `Tile ${index + 1}`;
 
-    item.textContent = name;
+    item.textContent =
+        name;
 
-    item.addEventListener("click", () => {
-        selectTile(tile);
-    });
+    item.addEventListener(
+        "click",
+        () => {
+            selectTile(tile);
+        }
+    );
 
     list.appendChild(item);
 }
 
 
-/* ------------------------------------------------------------
-   Tile selection
-   ------------------------------------------------------------ */
+/* ============================================================
+   SELECT TILE
+   ============================================================ */
 
 function selectTile(tile) {
     currentTile = tile;
@@ -406,175 +584,255 @@ function selectTile(tile) {
         tile.id ||
         "Selected tile";
 
-    const selectedTitle = $("selected-title");
-    const selectedInfo = $("selected-info");
+    const selectedTitle =
+        getEl("selected-title");
+
+    const selectedInfo =
+        getEl("selected-info");
+
 
     if (selectedTitle) {
-        selectedTitle.textContent = title;
+        selectedTitle.textContent =
+            title;
     }
+
 
     if (selectedInfo) {
         selectedInfo.textContent =
             tile.id || "";
     }
 
-    updateSelectedAttributes([]);
 
-    setStatus(`Selected ${title}`);
+    updateSelectedAttributes(
+        []
+    );
+
+    setStatus(
+        `Selected ${title}`
+    );
 
     loadSelectedTile();
 }
 
 
-/* ------------------------------------------------------------
-   COPC asset detection
-   ------------------------------------------------------------ */
+/* ============================================================
+   FIND COPC ASSET
+   ============================================================ */
 
 function getCopcUrl(tile) {
-    if (!tile || !tile.assets) {
+    if (
+        !tile ||
+        !tile.assets
+    ) {
         return null;
     }
 
-    const assets = tile.assets;
+    const assets =
+        tile.assets;
+
 
     /*
-     * First look for an asset explicitly marked COPC.
+     * Prefer explicitly COPC-labelled assets.
      */
-    for (const [key, asset] of Object.entries(assets)) {
-        const href = asset?.href || "";
+    for (
+        const [
+            key,
+            asset
+        ] of Object.entries(assets)
+    ) {
+        const href =
+            asset?.href || "";
 
         const mediaType =
             asset?.type ||
             asset?.media_type ||
             "";
 
-        const roles = Array.isArray(asset?.roles)
-            ? asset.roles
-            : [];
+        const roles =
+            Array.isArray(
+                asset?.roles
+            )
+                ? asset.roles
+                : [];
 
         const text = (
             `${key} ${href} ${mediaType} ${roles.join(" ")}`
         ).toLowerCase();
 
+
         if (
             text.includes("copc") ||
-            href.toLowerCase().endsWith(".copc.laz") ||
-            href.toLowerCase().endsWith(".copc")
+            href
+                .toLowerCase()
+                .endsWith(
+                    ".copc.laz"
+                ) ||
+            href
+                .toLowerCase()
+                .endsWith(
+                    ".copc"
+                )
         ) {
             return href;
         }
     }
+
 
     /*
-     * Fallback: find a LAZ/LAS asset.
+     * Fallback to LAZ.
      */
-    for (const asset of Object.values(assets)) {
-        const href = asset?.href || "";
+    for (
+        const asset of Object.values(
+            assets
+        )
+    ) {
+        const href =
+            asset?.href || "";
 
         if (
-            /\.copc(\.laz)?($|\?)/i.test(href) ||
-            /\.laz($|\?)/i.test(href)
+            /\.copc(\.laz)?($|\?)/i.test(
+                href
+            ) ||
+            /\.laz($|\?)/i.test(
+                href
+            )
         ) {
             return href;
         }
     }
+
 
     return null;
 }
 
 
-/* ------------------------------------------------------------
-   Load point cloud
-   ------------------------------------------------------------ */
+/* ============================================================
+   LOAD SELECTED TILE
+   ============================================================ */
 
 async function loadSelectedTile() {
     if (!currentTile) {
         return;
     }
 
-    const copcUrl = getCopcUrl(currentTile);
+    const copcUrl =
+        getCopcUrl(
+            currentTile
+        );
+
 
     if (!copcUrl) {
         setStatus(
             "No COPC asset was found for this tile."
         );
+
         return;
     }
 
-    setStatus("Loading COPC…");
+
+    setStatus(
+        "Loading COPC…"
+    );
+
 
     /*
-     * If this exact tile was already loaded, simply select it.
+     * Already loaded?
      */
-    if (loadedPointClouds.has(copcUrl)) {
-        const pointcloud =
-            loadedPointClouds.get(copcUrl);
+    if (
+        loadedPointClouds.has(
+            copcUrl
+        )
+    ) {
+        currentPointCloud =
+            loadedPointClouds.get(
+                copcUrl
+            );
 
-        currentPointCloud = pointcloud;
-
-        showPointCloudInfo(pointcloud);
+        showPointCloudInfo(
+            currentPointCloud
+        );
 
         fitCurrentPointCloud();
 
-        setStatus("Tile already loaded.");
+        setStatus(
+            "Tile already loaded."
+        );
 
         return;
     }
 
-    /*
-     * Keep the number of loaded clouds bounded.
-     */
+
     enforcePointCloudLimit();
 
+
     try {
-        await new Promise((resolve, reject) => {
-            Potree.loadPointCloud(
-                copcUrl,
-                currentTile.id || "swissSURFACE3D",
-                event => {
-                    if (!event || !event.pointcloud) {
-                        reject(
-                            new Error(
-                                "Potree did not return a point cloud."
-                            )
+        await new Promise(
+            (resolve, reject) => {
+
+                Potree.loadPointCloud(
+                    copcUrl,
+                    currentTile.id ||
+                        "swissSURFACE3D",
+
+                    event => {
+
+                        if (
+                            !event ||
+                            !event.pointcloud
+                        ) {
+                            reject(
+                                new Error(
+                                    "Potree did not return a point cloud."
+                                )
+                            );
+
+                            return;
+                        }
+
+
+                        const pointcloud =
+                            event.pointcloud;
+
+
+                        configurePointCloud(
+                            pointcloud
                         );
 
-                        return;
+
+                        viewer.scene.addPointCloud(
+                            pointcloud
+                        );
+
+
+                        loadedPointClouds.set(
+                            copcUrl,
+                            pointcloud
+                        );
+
+
+                        currentPointCloud =
+                            pointcloud;
+
+
+                        showPointCloudInfo(
+                            pointcloud
+                        );
+
+
+                        fitCurrentPointCloud();
+
+
+                        setStatus(
+                            "COPC loaded."
+                        );
+
+
+                        resolve();
                     }
+                );
+            }
+        );
 
-                    const pointcloud =
-                        event.pointcloud;
-
-                    configurePointCloud(
-                        pointcloud
-                    );
-
-                    viewer.scene.addPointCloud(
-                        pointcloud
-                    );
-
-                    loadedPointClouds.set(
-                        copcUrl,
-                        pointcloud
-                    );
-
-                    currentPointCloud =
-                        pointcloud;
-
-                    showPointCloudInfo(
-                        pointcloud
-                    );
-
-                    fitCurrentPointCloud();
-
-                    setStatus(
-                        "COPC loaded."
-                    );
-
-                    resolve();
-                }
-            );
-        });
     } catch (error) {
         console.error(error);
 
@@ -585,103 +843,115 @@ async function loadSelectedTile() {
 }
 
 
-/* ------------------------------------------------------------
-   Configure point cloud
-   ------------------------------------------------------------ */
+/* ============================================================
+   CONFIGURE POINT CLOUD
+   ============================================================ */
 
-function configurePointCloud(pointcloud) {
-    const material = pointcloud.material;
+function configurePointCloud(
+    pointcloud
+) {
+    const material =
+        pointcloud.material;
+
 
     /*
-     * Point appearance.
+     * Point size.
      */
-    material.size = 1.0;
+    material.size =
+        1.0;
 
-    material.pointSizeType =
-        Potree.PointSizeType.ADAPTIVE;
 
+    /*
+     * Adaptive point sizing.
+     */
+    if (
+        Potree.PointSizeType &&
+        Potree.PointSizeType.ADAPTIVE !==
+            undefined
+    ) {
+        material.pointSizeType =
+            Potree.PointSizeType.ADAPTIVE;
+    }
+
+
+    /*
+     * Square points.
+     */
     if (
         Potree.PointShape &&
-        Potree.PointShape.SQUARE !== undefined
+        Potree.PointShape.SQUARE !==
+            undefined
     ) {
         material.shape =
             Potree.PointShape.SQUARE;
     }
 
+
     /*
-     * IMPORTANT FOR POTREE 1.8:
+     * IMPORTANT:
      *
-     * Intensity should not rely on automatic scaling.
-     * Explicitly use the LAS/COPC 16-bit range.
+     * Potree 1.7/1.8 often needs explicit intensity
+     * scaling. swissSURFACE3D LAS intensity is generally
+     * represented as a 16-bit value.
      */
-    if ("intensityRange" in material) {
+    if (
+        "intensityRange" in material
+    ) {
         material.intensityRange = [
             0,
             65535
         ];
     }
 
+
     /*
-     * Start with elevation because swissSURFACE3D is
-     * primarily elevation data.
+     * Start with elevation.
      */
     applyColorMode(
         pointcloud,
         "elevation"
     );
 
+
     /*
-     * Give the point cloud a reasonable bounding box.
+     * Full opacity.
      */
     if (
-        pointcloud.boundingBox &&
-        pointcloud.boundingBox.min &&
-        pointcloud.boundingBox.max
+        "opacity" in material
     ) {
-        const box = pointcloud.boundingBox;
-
-        const center = new THREE.Vector3();
-
-        box.getCenter(center);
-
-        /*
-         * Do not alter the actual cloud position.
-         * We only use this information for sections.
-         */
+        material.opacity =
+            1.0;
     }
 
-    /*
-     * If supported, make the point cloud slightly
-     * brighter.
-     */
-    if ("opacity" in material) {
-        material.opacity = 1.0;
-    }
 
-    refreshPointCloudMaterial(pointcloud);
+    refreshPointCloudMaterial(
+        pointcloud
+    );
 }
 
 
-/* ------------------------------------------------------------
-   Material refresh
-   ------------------------------------------------------------ */
+/* ============================================================
+   MATERIAL / SHADER REFRESH
+   ============================================================ */
 
-function refreshPointCloudMaterial(pointcloud) {
-    if (!pointcloud || !pointcloud.material) {
+function refreshPointCloudMaterial(
+    pointcloud
+) {
+    if (
+        !pointcloud ||
+        !pointcloud.material
+    ) {
         return;
     }
 
-    const material = pointcloud.material;
+    const material =
+        pointcloud.material;
 
-    /*
-     * Potree regenerates its shader when these properties
-     * change. Calling updateShaderSource explicitly makes
-     * the behavior reliable when we change modes ourselves.
-     */
+
     try {
         if (
             typeof material.updateShaderSource ===
-            "function"
+                "function"
         ) {
             material.updateShaderSource();
         }
@@ -692,62 +962,78 @@ function refreshPointCloudMaterial(pointcloud) {
         );
     }
 
+
     /*
-     * Force a render.
+     * Tell WebGL that the material changed.
      */
-    if (viewer && viewer.renderer) {
-        viewer.renderer.render(
-            viewer.scene.scene,
-            viewer.scene.getActiveCamera()
-        );
-    }
+    material.needsUpdate =
+        true;
 }
 
 
-/* ------------------------------------------------------------
-   Color modes
-   ------------------------------------------------------------ */
+/* ============================================================
+   COLOR MODES
+   ============================================================ */
 
-function applyColorMode(pointcloud, mode) {
-    if (!pointcloud || !pointcloud.material) {
+function applyColorMode(
+    pointcloud,
+    mode
+) {
+    if (
+        !pointcloud ||
+        !pointcloud.material
+    ) {
         return;
     }
 
-    const material = pointcloud.material;
+    const material =
+        pointcloud.material;
+
 
     /*
-     * Always reset active attribute first.
+     * Reset scalar attribute.
      *
-     * This is important because Potree 1.8 uses
-     * activeAttributeName for scalar-field rendering.
+     * This is critical for Potree 1.8.
      */
-    material.activeAttributeName = null;
+    material.activeAttributeName =
+        null;
+
 
     switch (mode) {
+
+        /* ----------------------------------------------------
+           RGB
+           ---------------------------------------------------- */
+
         case "rgb":
+
             setPointColorType(
                 material,
                 "RGB"
             );
 
-            /*
-             * Do not set activeAttributeName here.
-             * RGB is handled directly by Potree's RGB
-             * color mode.
-             */
             break;
 
 
+        /* ----------------------------------------------------
+           INTENSITY
+           ---------------------------------------------------- */
+
         case "intensity":
+
             material.activeAttributeName =
                 "intensity";
 
-            if ("intensityRange" in material) {
+
+            if (
+                "intensityRange" in material
+            ) {
                 material.intensityRange = [
                     0,
                     65535
                 ];
             }
+
 
             setPointColorType(
                 material,
@@ -757,16 +1043,25 @@ function applyColorMode(pointcloud, mode) {
             break;
 
 
+        /* ----------------------------------------------------
+           INTENSITY GRADIENT
+           ---------------------------------------------------- */
+
         case "intensity-gradient":
+
             material.activeAttributeName =
                 "intensity";
 
-            if ("intensityRange" in material) {
+
+            if (
+                "intensityRange" in material
+            ) {
                 material.intensityRange = [
                     0,
                     65535
                 ];
             }
+
 
             setPointColorType(
                 material,
@@ -776,9 +1071,15 @@ function applyColorMode(pointcloud, mode) {
             break;
 
 
+        /* ----------------------------------------------------
+           CLASSIFICATION
+           ---------------------------------------------------- */
+
         case "classification":
+
             material.activeAttributeName =
                 "classification";
+
 
             setPointColorType(
                 material,
@@ -788,9 +1089,15 @@ function applyColorMode(pointcloud, mode) {
             break;
 
 
+        /* ----------------------------------------------------
+           RETURN NUMBER
+           ---------------------------------------------------- */
+
         case "return-number":
+
             material.activeAttributeName =
                 "returnNumber";
+
 
             setPointColorType(
                 material,
@@ -800,40 +1107,57 @@ function applyColorMode(pointcloud, mode) {
             break;
 
 
+        /* ----------------------------------------------------
+           NUMBER OF RETURNS
+           ---------------------------------------------------- */
+
         case "number-of-returns":
+
             material.activeAttributeName =
                 "numberOfReturns";
 
+
             /*
-             * Potree 1.8 does not consistently expose a
-             * dedicated PointColorType for numberOfReturns.
-             *
-             * Use intensity-style scalar coloring only if
-             * the enum exists. Otherwise fall back to RGB
-             * rather than producing a black shader.
+             * Some Potree 1.8 builds don't provide
+             * NUMBER_OF_RETURNS.
              */
             if (
                 Potree.PointColorType &&
-                Potree.PointColorType.NUMBER_OF_RETURNS !==
+                Potree.PointColorType
+                    .NUMBER_OF_RETURNS !==
                     undefined
             ) {
+
                 material.pointColorType =
-                    Potree.PointColorType.NUMBER_OF_RETURNS;
-            } else if (
-                Potree.PointColorType &&
-                Potree.PointColorType.INTENSITY !==
-                    undefined
-            ) {
-                material.pointColorType =
-                    Potree.PointColorType.INTENSITY;
+                    Potree.PointColorType
+                        .NUMBER_OF_RETURNS;
+
+            } else {
+
+                /*
+                 * Don't invent an unsupported enum.
+                 * Keep the scalar attribute selected,
+                 * but use intensity as the available
+                 * scalar shader.
+                 */
+                setPointColorType(
+                    material,
+                    "INTENSITY"
+                );
             }
 
             break;
 
 
+        /* ----------------------------------------------------
+           SOURCE ID
+           ---------------------------------------------------- */
+
         case "source-id":
+
             material.activeAttributeName =
                 "pointSourceID";
+
 
             if (
                 Potree.PointColorType &&
@@ -847,33 +1171,43 @@ function applyColorMode(pointcloud, mode) {
             break;
 
 
+        /* ----------------------------------------------------
+           ELEVATION
+           ---------------------------------------------------- */
+
         case "elevation":
+
         default:
+
             /*
              * IMPORTANT:
              *
-             * Do NOT use:
+             * Do NOT set:
              *
-             * material.activeAttributeName = "elevation"
+             * activeAttributeName = "elevation"
              *
-             * because elevation is normally a Potree color
-             * mode rather than a LAS attribute called
-             * "elevation".
+             * Elevation is handled as Potree's
+             * elevation/height color mode.
              */
-            material.activeAttributeName = null;
+            material.activeAttributeName =
+                null;
+
 
             if (
                 Potree.PointColorType &&
                 Potree.PointColorType.ELEVATION !==
                     undefined
             ) {
+
                 material.pointColorType =
                     Potree.PointColorType.ELEVATION;
+
             } else if (
                 Potree.PointColorType &&
                 Potree.PointColorType.HEIGHT !==
                     undefined
             ) {
+
                 material.pointColorType =
                     Potree.PointColorType.HEIGHT;
             }
@@ -881,18 +1215,27 @@ function applyColorMode(pointcloud, mode) {
             break;
     }
 
+
     /*
-     * Make elevation range explicit when possible.
+     * Explicit elevation range.
      */
     if (
         mode === "elevation" &&
         pointcloud.boundingBox
     ) {
+
         const minZ =
-            pointcloud.boundingBox.min.z;
+            pointcloud
+                .boundingBox
+                .min
+                .z;
 
         const maxZ =
-            pointcloud.boundingBox.max.z;
+            pointcloud
+                .boundingBox
+                .max
+                .z;
+
 
         if (
             Number.isFinite(minZ) &&
@@ -907,77 +1250,102 @@ function applyColorMode(pointcloud, mode) {
         }
     }
 
+
     refreshPointCloudMaterial(
         pointcloud
     );
 
-    /*
-     * Update displayed attribute information.
-     */
-    updateDisplayedColorMode(mode);
+
+    updateDisplayedColorMode(
+        mode
+    );
 }
 
 
-/* ------------------------------------------------------------
-   PointColorType helper
-   ------------------------------------------------------------ */
+/* ============================================================
+   POINT COLOR TYPE HELPER
+   ============================================================ */
 
-function setPointColorType(material, name) {
+function setPointColorType(
+    material,
+    name
+) {
     if (
         !Potree.PointColorType ||
-        Potree.PointColorType[name] === undefined
+        Potree.PointColorType[name] ===
+            undefined
     ) {
         console.warn(
             `Potree.PointColorType.${name} is not available.`
         );
 
-        return;
+        return false;
     }
+
 
     material.pointColorType =
         Potree.PointColorType[name];
+
+
+    return true;
 }
 
 
-/* ------------------------------------------------------------
-   Color mode UI
-   ------------------------------------------------------------ */
+/* ============================================================
+   COLOR MODE UI
+   ============================================================ */
 
-function updateDisplayedColorMode(mode) {
-    const selector = $("color-mode");
+function updateDisplayedColorMode(
+    mode
+) {
+    const selector =
+        getEl("color-mode");
 
     if (
         selector &&
         selector.value !== mode
     ) {
-        selector.value = mode;
+        selector.value =
+            mode;
     }
 }
 
 
-/* ------------------------------------------------------------
-   Point-cloud attributes
-   ------------------------------------------------------------ */
+/* ============================================================
+   POINT-CLOUD ATTRIBUTES
+   ============================================================ */
 
-function getPointAttributes(pointcloud) {
+function getPointAttributes(
+    pointcloud
+) {
     const result = [];
 
-    const attributes =
-        pointcloud?.pcoGeometry?.pointAttributes;
+    const pointAttributes =
+        pointcloud
+            ?.pcoGeometry
+            ?.pointAttributes;
 
-    if (!attributes) {
+
+    if (!pointAttributes) {
         return result;
     }
 
-    /*
-     * Potree PointAttributes generally contains an
-     * .attributes array.
-     */
-    if (Array.isArray(attributes.attributes)) {
-        for (const attribute of attributes.attributes) {
+
+    if (
+        Array.isArray(
+            pointAttributes.attributes
+        )
+    ) {
+
+        for (
+            const attribute of
+                pointAttributes.attributes
+        ) {
+
             if (!attribute) {
                 continue;
             }
+
 
             result.push({
                 name:
@@ -1001,27 +1369,41 @@ function getPointAttributes(pointcloud) {
         }
     }
 
+
     return result;
 }
 
 
-function showPointCloudInfo(pointcloud) {
+/* ============================================================
+   SHOW POINT-CLOUD INFO
+   ============================================================ */
+
+function showPointCloudInfo(
+    pointcloud
+) {
     const attributes =
-        getPointAttributes(pointcloud);
+        getPointAttributes(
+            pointcloud
+        );
+
 
     updateSelectedAttributes(
         attributes
     );
 
-    /*
-     * Also write a useful summary.
-     */
+
     const selectedInfo =
-        $("selected-info");
+        getEl("selected-info");
+
 
     if (selectedInfo) {
+
         const names =
-            attributes.map(a => a.name);
+            attributes.map(
+                attribute =>
+                    attribute.name
+            );
+
 
         selectedInfo.textContent =
             names.length
@@ -1031,18 +1413,34 @@ function showPointCloudInfo(pointcloud) {
 }
 
 
-function updateSelectedAttributes(attributes) {
-    const list = $("attribute-list");
+/* ============================================================
+   ATTRIBUTE LIST UI
+   ============================================================ */
+
+function updateSelectedAttributes(
+    attributes
+) {
+    const list =
+        getEl("attribute-list");
+
 
     if (!list) {
         return;
     }
 
+
     list.innerHTML = "";
 
-    if (!attributes || attributes.length === 0) {
+
+    if (
+        !attributes ||
+        attributes.length === 0
+    ) {
+
         const item =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
 
         item.className =
             "attribute-item";
@@ -1050,58 +1448,83 @@ function updateSelectedAttributes(attributes) {
         item.textContent =
             "No attribute metadata available.";
 
-        list.appendChild(item);
+        list.appendChild(
+            item
+        );
 
         return;
     }
 
-    for (const attribute of attributes) {
+
+    for (
+        const attribute of attributes
+    ) {
+
         const item =
-            document.createElement("div");
+            document.createElement(
+                "div"
+            );
 
         item.className =
             "attribute-item";
 
+
         const name =
-            attribute.name || "unknown";
+            attribute.name ||
+            "unknown";
+
 
         const type =
-            attribute.type || "";
+            attribute.type ||
+            "";
+
 
         const count =
             attribute.numElements
                 ? ` × ${attribute.numElements}`
                 : "";
 
+
         item.innerHTML =
             `<strong>${escapeHtml(name)}</strong>` +
             `<span>${escapeHtml(type)}${escapeHtml(count)}</span>`;
 
-        list.appendChild(item);
+
+        list.appendChild(
+            item
+        );
     }
 }
 
 
-/* ------------------------------------------------------------
-   Fit camera
-   ------------------------------------------------------------ */
+/* ============================================================
+   CAMERA FIT
+   ============================================================ */
 
 function fitCurrentPointCloud() {
-    if (!viewer || !currentPointCloud) {
+    if (
+        !viewer ||
+        !currentPointCloud
+    ) {
         return;
     }
 
+
     try {
+
         viewer.fitToScreen(
             0.5,
             500,
             currentPointCloud
         );
+
     } catch (error) {
+
         console.warn(
             "fitToScreen failed:",
             error
         );
+
 
         try {
             viewer.fitToScreen();
@@ -1115,28 +1538,36 @@ function fitCurrentPointCloud() {
 }
 
 
-/* ------------------------------------------------------------
-   Point cloud limit
-   ------------------------------------------------------------ */
+/* ============================================================
+   POINT-CLOUD LIMIT
+   ============================================================ */
 
 function enforcePointCloudLimit() {
     const max =
-        CONFIG.MAX_LOADED_POINTCLOUDS || 4;
+        CONFIG.MAX_LOADED_POINTCLOUDS ||
+        4;
+
 
     while (
         loadedPointClouds.size >= max
     ) {
+
         const first =
-            loadedPointClouds.entries().next();
+            loadedPointClouds
+                .entries()
+                .next();
+
 
         if (first.done) {
             break;
         }
 
+
         const [
             url,
             pointcloud
         ] = first.value;
+
 
         unloadPointCloud(
             url,
@@ -1146,16 +1577,19 @@ function enforcePointCloudLimit() {
 }
 
 
-/* ------------------------------------------------------------
-   Unload current
-   ------------------------------------------------------------ */
+/* ============================================================
+   UNLOAD CURRENT POINT CLOUD
+   ============================================================ */
 
 function unloadCurrentPointCloud() {
     if (!currentPointCloud) {
         return;
     }
 
-    let urlToRemove = null;
+
+    let urlToRemove =
+        null;
+
 
     for (
         const [
@@ -1163,14 +1597,19 @@ function unloadCurrentPointCloud() {
             pointcloud
         ] of loadedPointClouds.entries()
     ) {
+
         if (
             pointcloud ===
             currentPointCloud
         ) {
-            urlToRemove = url;
+
+            urlToRemove =
+                url;
+
             break;
         }
     }
+
 
     if (urlToRemove) {
         unloadPointCloud(
@@ -1179,84 +1618,127 @@ function unloadCurrentPointCloud() {
         );
     }
 
-    currentPointCloud = null;
+
+    currentPointCloud =
+        null;
+
 
     clearSection();
 
+
     const selectedTitle =
-        $("selected-title");
+        getEl("selected-title");
+
 
     const selectedInfo =
-        $("selected-info");
+        getEl("selected-info");
+
 
     if (selectedTitle) {
         selectedTitle.textContent =
             "No tile selected";
     }
 
+
     if (selectedInfo) {
-        selectedInfo.textContent = "";
+        selectedInfo.textContent =
+            "";
     }
 
-    updateSelectedAttributes([]);
 
-    setStatus("Point cloud unloaded.");
+    updateSelectedAttributes(
+        []
+    );
+
+
+    setStatus(
+        "Point cloud unloaded."
+    );
 }
 
 
-function unloadPointCloud(url, pointcloud) {
+/* ============================================================
+   UNLOAD POINT CLOUD
+   ============================================================ */
+
+function unloadPointCloud(
+    url,
+    pointcloud
+) {
     try {
+
         if (
             viewer &&
             viewer.scene &&
-            viewer.scene.pointclouds
+            Array.isArray(
+                viewer.scene.pointclouds
+            )
         ) {
+
             const index =
-                viewer.scene.pointclouds.indexOf(
-                    pointcloud
-                );
+                viewer.scene
+                    .pointclouds
+                    .indexOf(
+                        pointcloud
+                    );
+
 
             if (index !== -1) {
-                viewer.scene.pointclouds.splice(
-                    index,
-                    1
-                );
+                viewer.scene
+                    .pointclouds
+                    .splice(
+                        index,
+                        1
+                    );
             }
         }
 
+
         if (
             pointcloud.parent &&
-            typeof pointcloud.parent.remove ===
+            typeof pointcloud
+                .parent
+                .remove ===
                 "function"
         ) {
+
             pointcloud.parent.remove(
                 pointcloud
             );
         }
+
     } catch (error) {
+
         console.warn(
             "Could not fully remove point cloud:",
             error
         );
     }
 
-    loadedPointClouds.delete(url);
+
+    loadedPointClouds.delete(
+        url
+    );
+
 
     if (
         currentPointCloud ===
         pointcloud
     ) {
-        currentPointCloud = null;
+
+        currentPointCloud =
+            null;
     }
 }
 
 
-/* ------------------------------------------------------------
-   Clear all point clouds
-   ------------------------------------------------------------ */
+/* ============================================================
+   CLEAR ALL POINT CLOUDS
+   ============================================================ */
 
 function clearAllPointClouds() {
     clearSection();
+
 
     for (
         const [
@@ -1264,42 +1746,65 @@ function clearAllPointClouds() {
             pointcloud
         ] of loadedPointClouds.entries()
     ) {
+
         try {
+
             if (
                 pointcloud.parent &&
-                typeof pointcloud.parent.remove ===
+                typeof pointcloud
+                    .parent
+                    .remove ===
                     "function"
             ) {
+
                 pointcloud.parent.remove(
                     pointcloud
                 );
             }
+
         } catch (error) {
-            console.warn(error);
+
+            console.warn(
+                error
+            );
         }
     }
 
+
     loadedPointClouds.clear();
 
-    currentPointCloud = null;
-    currentTile = null;
+
+    currentPointCloud =
+        null;
+
+    currentTile =
+        null;
+
 
     const selectedTitle =
-        $("selected-title");
+        getEl("selected-title");
+
 
     const selectedInfo =
-        $("selected-info");
+        getEl("selected-info");
+
 
     if (selectedTitle) {
         selectedTitle.textContent =
             "No tile selected";
     }
 
+
     if (selectedInfo) {
-        selectedInfo.textContent = "";
+        selectedInfo.textContent =
+            "";
     }
 
-    updateSelectedAttributes([]);
+
+    updateSelectedAttributes(
+        []
+    );
+
 
     setStatus(
         "All point clouds cleared."
@@ -1308,13 +1813,8 @@ function clearAllPointClouds() {
 
 
 /* ============================================================
-   SECTIONS
+   SECTION BOUNDS
    ============================================================ */
-
-
-/* ------------------------------------------------------------
-   Section state
-   ------------------------------------------------------------ */
 
 function getPointCloudBounds() {
     if (
@@ -1324,40 +1824,49 @@ function getPointCloudBounds() {
         return null;
     }
 
+
     const box =
         currentPointCloud.boundingBox;
+
 
     const min =
         box.min.clone();
 
+
     const max =
         box.max.clone();
+
 
     return {
         min,
         max,
 
-        size: new THREE.Vector3(
-            max.x - min.x,
-            max.y - min.y,
-            max.z - min.z
-        ),
+        size:
+            new THREE.Vector3(
+                max.x - min.x,
+                max.y - min.y,
+                max.z - min.z
+            ),
 
-        center: new THREE.Vector3(
-            (min.x + max.x) / 2,
-            (min.y + max.y) / 2,
-            (min.z + max.z) / 2
-        )
+        center:
+            new THREE.Vector3(
+                (min.x + max.x) / 2,
+                (min.y + max.y) / 2,
+                (min.z + max.z) / 2
+            )
     };
 }
 
 
-/* ------------------------------------------------------------
-   Create section
-   ------------------------------------------------------------ */
+/* ============================================================
+   CREATE SECTION
+   ============================================================ */
 
-function createSection(type) {
+function createSection(
+    type
+) {
     if (!currentPointCloud) {
+
         setStatus(
             "Load a point cloud first."
         );
@@ -1365,12 +1874,16 @@ function createSection(type) {
         return;
     }
 
+
     clearSection();
+
 
     const bounds =
         getPointCloudBounds();
 
+
     if (!bounds) {
+
         setStatus(
             "Point-cloud bounds are unavailable."
         );
@@ -1378,25 +1891,28 @@ function createSection(type) {
         return;
     }
 
+
     const volume =
         new Potree.BoxVolume();
+
 
     volume.name =
         type === "horizontal"
             ? "Horizontal section"
             : "Vertical section";
 
-    volume.clip = true;
-    volume.visible = true;
 
-    /*
-     * IMPORTANT:
-     *
-     * Potree examples use volume.scale as the actual
-     * world-space size of the clipping box.
-     */
+    volume.clip =
+        true;
+
+
+    volume.visible =
+        true;
+
+
     const size =
         bounds.size.clone();
+
 
     const minimumThickness =
         Math.max(
@@ -1408,39 +1924,62 @@ function createSection(type) {
             0.1
         );
 
-    if (type === "horizontal") {
+
+    if (
+        type === "horizontal"
+    ) {
+
         /*
-         * Thin horizontal slab.
+         * Large XY slab, thin Z.
          */
         volume.scale.set(
-            Math.max(size.x, minimumThickness),
-            Math.max(size.y, minimumThickness),
+            Math.max(
+                size.x,
+                minimumThickness
+            ),
+
+            Math.max(
+                size.y,
+                minimumThickness
+            ),
+
             Math.max(
                 size.z * 0.02,
                 minimumThickness
             )
         );
 
+
         volume.position.set(
             bounds.center.x,
             bounds.center.y,
             bounds.center.z
         );
+
     } else {
+
         /*
-         * Thin vertical slab.
+         * Vertical slab.
          *
-         * Default orientation:
-         * thin along X, large along Y/Z.
+         * Thin X, large Y and Z.
          */
         volume.scale.set(
             Math.max(
                 size.x * 0.02,
                 minimumThickness
             ),
-            Math.max(size.y, minimumThickness),
-            Math.max(size.z, minimumThickness)
+
+            Math.max(
+                size.y,
+                minimumThickness
+            ),
+
+            Math.max(
+                size.z,
+                minimumThickness
+            )
         );
+
 
         volume.position.set(
             bounds.center.x,
@@ -1449,31 +1988,34 @@ function createSection(type) {
         );
     }
 
-    /*
-     * Add to Potree's scene.
-     */
+
     viewer.scene.addVolume(
         volume
     );
 
-    /*
-     * Only show points inside the section.
-     */
+
     try {
+
         viewer.setClipTask(
             Potree.ClipTask.SHOW_INSIDE
         );
+
     } catch (error) {
+
         console.warn(
             "Could not set SHOW_INSIDE:",
             error
         );
     }
 
+
     currentSection = {
         type,
+
         volume,
+
         bounds,
+
         position:
             type === "horizontal"
                 ? bounds.center.z
@@ -1485,35 +2027,58 @@ function createSection(type) {
                 : volume.scale.x
     };
 
+
     createSectionControls();
 
     updateSectionInfo();
 
+
     setStatus(
-        `${type === "horizontal" ? "Horizontal" : "Vertical"} section enabled.`
+        `${
+            type === "horizontal"
+                ? "Horizontal"
+                : "Vertical"
+        } section enabled.`
     );
 }
 
 
-/* ------------------------------------------------------------
-   Section controls
-   ------------------------------------------------------------ */
+/* ============================================================
+   SECTION CONTROLS
+   ============================================================ */
 
 function createSectionControls() {
     const container =
-        $("section-info");
+        getEl("section-info");
 
-    if (!container || !currentSection) {
+
+    if (
+        !container ||
+        !currentSection
+    ) {
         return;
     }
 
+
     const bounds =
         currentSection.bounds;
+
+
+    const controls =
+        document.createElement(
+            "div"
+        );
+
+
+    controls.className =
+        "section-control";
+
 
     if (
         currentSection.type ===
         "horizontal"
     ) {
+
         const min =
             bounds.min.z;
 
@@ -1521,15 +2086,17 @@ function createSectionControls() {
             bounds.max.z;
 
         const value =
-            currentSection.volume.position.z;
+            currentSection
+                .volume
+                .position
+                .z;
 
-        const range =
-            document.createElement("div");
 
-        range.className =
-            "section-control";
+        controls.innerHTML = `
+            <div class="section-type">
+                Horizontal section
+            </div>
 
-        range.innerHTML = `
             <label>
                 Height
                 <span id="section-position-value">
@@ -1542,7 +2109,10 @@ function createSectionControls() {
                 type="range"
                 min="${min}"
                 max="${max}"
-                step="${Math.max((max - min) / 1000, 0.01)}"
+                step="${Math.max(
+                    (max - min) / 1000,
+                    0.01
+                )}"
                 value="${value}"
             >
 
@@ -1556,13 +2126,24 @@ function createSectionControls() {
             <input
                 id="section-thickness"
                 type="range"
-                min="${Math.max((max - min) / 1000, 0.01)}"
-                max="${Math.max((max - min) * 0.25, 0.1)}"
-                step="${Math.max((max - min) / 1000, 0.01)}"
+                min="${Math.max(
+                    (max - min) / 1000,
+                    0.01
+                )}"
+                max="${Math.max(
+                    (max - min) * 0.25,
+                    0.1
+                )}"
+                step="${Math.max(
+                    (max - min) / 1000,
+                    0.01
+                )}"
                 value="${currentSection.volume.scale.z}"
             >
         `;
+
     } else {
+
         const min =
             bounds.min.x;
 
@@ -1570,15 +2151,17 @@ function createSectionControls() {
             bounds.max.x;
 
         const value =
-            currentSection.volume.position.x;
+            currentSection
+                .volume
+                .position
+                .x;
 
-        const range =
-            document.createElement("div");
 
-        range.className =
-            "section-control";
+        controls.innerHTML = `
+            <div class="section-type">
+                Vertical section
+            </div>
 
-        range.innerHTML = `
             <label>
                 Position X
                 <span id="section-position-value">
@@ -1591,7 +2174,10 @@ function createSectionControls() {
                 type="range"
                 min="${min}"
                 max="${max}"
-                step="${Math.max((max - min) / 1000, 0.01)}"
+                step="${Math.max(
+                    (max - min) / 1000,
+                    0.01
+                )}"
                 value="${value}"
             >
 
@@ -1605,38 +2191,50 @@ function createSectionControls() {
             <input
                 id="section-thickness"
                 type="range"
-                min="${Math.max((max - min) / 1000, 0.01)}"
-                max="${Math.max((max - min) * 0.25, 0.1)}"
-                step="${Math.max((max - min) / 1000, 0.01)}"
+                min="${Math.max(
+                    (max - min) / 1000,
+                    0.01
+                )}"
+                max="${Math.max(
+                    (max - min) * 0.25,
+                    0.1
+                )}"
+                step="${Math.max(
+                    (max - min) / 1000,
+                    0.01
+                )}"
                 value="${currentSection.volume.scale.x}"
             >
         `;
     }
 
+
     container.innerHTML = "";
 
     container.appendChild(
-        createSectionTitle()
+        controls
     );
 
-    container.appendChild(
-        range
-    );
 
     const positionSlider =
-        $("section-position");
+        getEl("section-position");
+
 
     const thicknessSlider =
-        $("section-thickness");
+        getEl("section-thickness");
+
 
     if (positionSlider) {
+
         positionSlider.addEventListener(
             "input",
             updateSectionFromControls
         );
     }
 
+
     if (thicknessSlider) {
+
         thicknessSlider.addEventListener(
             "input",
             updateSectionFromControls
@@ -1645,44 +2243,34 @@ function createSectionControls() {
 }
 
 
-function createSectionTitle() {
-    const title =
-        document.createElement("div");
-
-    title.className =
-        "section-type";
-
-    title.textContent =
-        currentSection.type ===
-        "horizontal"
-            ? "Horizontal section"
-            : "Vertical section";
-
-    return title;
-}
-
-
-/* ------------------------------------------------------------
-   Update section from sliders
-   ------------------------------------------------------------ */
+/* ============================================================
+   UPDATE SECTION FROM SLIDERS
+   ============================================================ */
 
 function updateSectionFromControls() {
     if (!currentSection) {
         return;
     }
 
+
     const positionSlider =
-        $("section-position");
+        getEl("section-position");
+
 
     const thicknessSlider =
-        $("section-thickness");
+        getEl("section-thickness");
+
 
     if (!positionSlider) {
         return;
     }
 
+
     const position =
-        Number(positionSlider.value);
+        Number(
+            positionSlider.value
+        );
+
 
     const thickness =
         Number(
@@ -1690,19 +2278,24 @@ function updateSectionFromControls() {
             1
         );
 
+
     const volume =
         currentSection.volume;
+
 
     if (
         currentSection.type ===
         "horizontal"
     ) {
+
         volume.position.z =
             position;
 
         volume.scale.z =
             thickness;
+
     } else {
+
         volume.position.x =
             position;
 
@@ -1710,49 +2303,59 @@ function updateSectionFromControls() {
             thickness;
     }
 
+
     updateSectionInfo();
 }
 
 
-/* ------------------------------------------------------------
-   Section information
-   ------------------------------------------------------------ */
+/* ============================================================
+   SECTION INFO
+   ============================================================ */
 
 function updateSectionInfo() {
     if (!currentSection) {
         return;
     }
 
+
     const volume =
         currentSection.volume;
 
+
     const positionValue =
-        $("section-position-value");
+        getEl(
+            "section-position-value"
+        );
+
 
     const thicknessValue =
-        $("section-thickness-value");
+        getEl(
+            "section-thickness-value"
+        );
 
-    if (
-        positionValue
-    ) {
+
+    if (positionValue) {
+
         const value =
             currentSection.type ===
             "horizontal"
                 ? volume.position.z
                 : volume.position.x;
 
+
         positionValue.textContent =
             `${value.toFixed(2)} m`;
     }
 
-    if (
-        thicknessValue
-    ) {
+
+    if (thicknessValue) {
+
         const value =
             currentSection.type ===
             "horizontal"
                 ? volume.scale.z
                 : volume.scale.x;
+
 
         thicknessValue.textContent =
             `${value.toFixed(2)} m`;
@@ -1760,81 +2363,112 @@ function updateSectionInfo() {
 }
 
 
-/* ------------------------------------------------------------
-   Clear section
-   ------------------------------------------------------------ */
+/* ============================================================
+   CLEAR SECTION
+   ============================================================ */
 
 function clearSection() {
     if (!viewer) {
         return;
     }
 
+
     if (
         currentSection &&
         currentSection.volume
     ) {
+
+        const volume =
+            currentSection.volume;
+
+
         try {
-            viewer.scene.removeVolume(
-                currentSection.volume
-            );
-        } catch (error) {
-            /*
-             * Some Potree builds don't expose
-             * removeVolume(). Fall back to removing
-             * directly from the scene volume collection.
-             */
-            try {
-                const volumes =
-                    viewer.scene.volumes;
 
-                const index =
-                    volumes.indexOf(
-                        currentSection.volume
-                    );
+            if (
+                typeof viewer.scene
+                    .removeVolume ===
+                    "function"
+            ) {
 
-                if (index !== -1) {
-                    volumes.splice(
-                        index,
-                        1
-                    );
+                viewer.scene.removeVolume(
+                    volume
+                );
+
+            } else {
+
+                /*
+                 * Fallback for Potree builds without
+                 * scene.removeVolume().
+                 */
+                if (
+                    viewer.scene.volumes
+                ) {
+
+                    const index =
+                        viewer.scene
+                            .volumes
+                            .indexOf(
+                                volume
+                            );
+
+
+                    if (index !== -1) {
+
+                        viewer.scene
+                            .volumes
+                            .splice(
+                                index,
+                                1
+                            );
+                    }
                 }
+
 
                 if (
-                    currentSection.volume.parent
+                    volume.parent
                 ) {
-                    currentSection.volume.parent.remove(
-                        currentSection.volume
+
+                    volume.parent.remove(
+                        volume
                     );
                 }
-            } catch (secondError) {
-                console.warn(
-                    "Could not remove section:",
-                    secondError
-                );
             }
+
+        } catch (error) {
+
+            console.warn(
+                "Could not remove section:",
+                error
+            );
         }
     }
 
-    currentSection = null;
 
-    /*
-     * Turn clipping off.
-     */
+    currentSection =
+        null;
+
+
     try {
+
         viewer.setClipTask(
             Potree.ClipTask.NONE
         );
+
     } catch (error) {
+
         console.warn(
             "Could not disable clipping:",
             error
         );
     }
 
+
     const sectionInfo =
-        $("section-info");
+        getEl("section-info");
+
 
     if (sectionInfo) {
+
         sectionInfo.innerHTML =
             "No section active.";
     }
@@ -1847,73 +2481,93 @@ function clearSection() {
 
 async function searchPlace() {
     const input =
-        $("search-input");
+        getEl("search-input");
+
 
     if (!input) {
         return;
     }
 
+
     const query =
         input.value.trim();
+
 
     if (!query) {
         return;
     }
 
+
     setStatus(
         `Searching for ${query}…`
     );
 
+
     try {
+
         const url =
             new URL(
                 CONFIG.SEARCH_URL
             );
+
 
         url.searchParams.set(
             "searchText",
             query
         );
 
+
         url.searchParams.set(
             "type",
             "locations"
         );
+
 
         url.searchParams.set(
             "origins",
             "address"
         );
 
+
         url.searchParams.set(
             "limit",
             "5"
         );
 
+
         const response =
             await fetch(url);
 
+
         if (!response.ok) {
+
             throw new Error(
                 `Search failed: ${response.status}`
             );
         }
 
+
         const data =
             await response.json();
 
+
         const results =
             data.results || [];
+
 
         renderSearchResults(
             results
         );
 
+
         setStatus(
             `${results.length} search result(s).`
         );
+
     } catch (error) {
+
         console.error(error);
+
 
         setStatus(
             `Place search failed: ${error.message}`
@@ -1922,24 +2576,42 @@ async function searchPlace() {
 }
 
 
-function renderSearchResults(results) {
+/* ============================================================
+   SEARCH RESULTS
+   ============================================================ */
+
+function renderSearchResults(
+    results
+) {
     const container =
-        $("search-results");
+        getEl("search-results");
+
 
     if (!container) {
         return;
     }
 
+
     container.innerHTML = "";
 
-    for (const result of results) {
-        const item =
-            document.createElement("button");
 
-        item.type = "button";
+    for (
+        const result of results
+    ) {
+
+        const item =
+            document.createElement(
+                "button"
+            );
+
+
+        item.type =
+            "button";
+
 
         const attrs =
             result.attrs || {};
+
 
         const label =
             attrs.label ||
@@ -1947,17 +2619,21 @@ function renderSearchResults(results) {
             result.label ||
             "Location";
 
+
         item.textContent =
             label;
+
 
         item.addEventListener(
             "click",
             () => {
+
                 const lat =
                     Number(
                         attrs.lat ||
                         result.lat
                     );
+
 
                 const lon =
                     Number(
@@ -1965,18 +2641,28 @@ function renderSearchResults(results) {
                         result.lon
                     );
 
+
                 if (
                     map &&
-                    Number.isFinite(lat) &&
-                    Number.isFinite(lon)
+                    Number.isFinite(
+                        lat
+                    ) &&
+                    Number.isFinite(
+                        lon
+                    )
                 ) {
+
                     map.setView(
-                        [lat, lon],
+                        [
+                            lat,
+                            lon
+                        ],
                         14
                     );
                 }
             }
         );
+
 
         container.appendChild(
             item
@@ -1991,6 +2677,7 @@ function renderSearchResults(results) {
 
 function downloadCurrentTile() {
     if (!currentTile) {
+
         setStatus(
             "No tile selected."
         );
@@ -1998,10 +2685,15 @@ function downloadCurrentTile() {
         return;
     }
 
+
     const url =
-        getCopcUrl(currentTile);
+        getCopcUrl(
+            currentTile
+        );
+
 
     if (!url) {
+
         setStatus(
             "No COPC URL found."
         );
@@ -2009,18 +2701,13 @@ function downloadCurrentTile() {
         return;
     }
 
-    /*
-     * Browser security prevents reliably forcing a
-     * cross-origin download from JavaScript.
-     *
-     * Opening the original COPC URL lets the browser
-     * handle the download/stream directly.
-     */
+
     window.open(
         url,
         "_blank",
         "noopener,noreferrer"
     );
+
 
     setStatus(
         "COPC URL opened in a new tab."
@@ -2029,11 +2716,13 @@ function downloadCurrentTile() {
 
 
 /* ============================================================
-   DEBUG HELPERS
+   DEBUG API
    ============================================================ */
 
 window.swissCOPC = {
-    viewer: () => viewer,
+
+    viewer: () =>
+        viewer,
 
     currentPointCloud: () =>
         currentPointCloud,
@@ -2048,7 +2737,9 @@ window.swissCOPC = {
         loadedPointClouds,
 
     colorMode: mode => {
+
         if (currentPointCloud) {
+
             applyColorMode(
                 currentPointCloud,
                 mode
@@ -2057,10 +2748,14 @@ window.swissCOPC = {
     },
 
     createHorizontalSection: () =>
-        createSection("horizontal"),
+        createSection(
+            "horizontal"
+        ),
 
     createVerticalSection: () =>
-        createSection("vertical"),
+        createSection(
+            "vertical"
+        ),
 
     clearSection: () =>
         clearSection()

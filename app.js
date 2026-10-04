@@ -67,39 +67,51 @@ document.addEventListener("DOMContentLoaded", () => {
    Potree
    ------------------------------------------------------------ */
 
-function initPotree() {
-    const renderArea = $("potree_render_area");
+   function initPotree() {
+       const renderArea = $("potree_render_area");
 
-    if (!renderArea) {
-        console.error("Missing #potree_render_area");
-        return;
-    }
+       if (!renderArea) {
+           console.error("Missing #potree_render_area");
+           return;
+       }
 
-    viewer = new Potree.Viewer(renderArea);
+       /*
+        * Potree 1.8 expects the DOM element ID here,
+        * not the DOM element itself.
+        */
+       viewer = new Potree.Viewer(
+           "potree_render_area"
+       );
 
-    viewer.setEDLEnabled(true);
-    viewer.setFOV(60);
-    viewer.setPointBudget(CONFIG.POINT_BUDGET || 2_000_000);
+       viewer.setEDLEnabled(true);
+       viewer.setFOV(60);
+       viewer.setPointBudget(
+           CONFIG.POINT_BUDGET || 2_000_000
+       );
 
-    /*
-     * IMPORTANT:
-     * Do NOT call viewer.loadGUI().
-     * We intentionally use our own interface.
-     */
+       /*
+        * Do NOT call viewer.loadGUI().
+        * We are using our own controls.
+        */
 
-    if (viewer.renderer) {
-        viewer.renderer.setClearColor(0x20252b, 1);
-    }
+       if (viewer.renderer) {
+           viewer.renderer.setClearColor(
+               0x20252b,
+               1
+           );
+       }
 
-    /*
-     * Start with clipping disabled.
-     */
-    try {
-        viewer.setClipTask(Potree.ClipTask.NONE);
-    } catch (error) {
-        console.warn("Could not set initial clip task:", error);
-    }
-}
+       try {
+           viewer.setClipTask(
+               Potree.ClipTask.NONE
+           );
+       } catch (error) {
+           console.warn(
+               "Could not set initial clip task:",
+               error
+           );
+       }
+   }
 
 
 /* ------------------------------------------------------------

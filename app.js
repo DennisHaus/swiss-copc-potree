@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_3");
+ setStatus("d_4");
 
 
 
@@ -2395,72 +2395,49 @@ function yieldToBrowser() {
  * The raster can independently contain ~100 million pixels.
  */
 
-function ensureSwissImageColorAttribute(
-    geometry,
-    count
-) {
-    if (
-        !geometry ||
-        !count
-    ) {
-        return null;
-    }
+ function ensureSwissImageColorAttribute(geometry, count) {
+     if (!geometry || !count) {
+         return null;
+     }
 
-    if (
-        typeof THREE ===
-        "undefined" ||
-        !THREE.BufferAttribute
-    ) {
-        throw new Error(
-            "THREE.BufferAttribute is unavailable."
-        );
-    }
+     /*
+      * Potree 1.8 must already know about the attribute.
+      * Do NOT dynamically create geometry.attributes.color
+      * after the point cloud has been loaded.
+      */
 
-    function ensureSwissImageColorAttribute(geometry, count) {
-    if (!geometry || !count) {
-        return null;
-    }
+     const color = geometry.attributes?.color;
 
-    /*
-     * Potree 1.8 must already know about the attribute.
-     * Do NOT dynamically create geometry.attributes.color
-     * after the point cloud has been loaded.
-     */
+     if (
+         color &&
+         color.count === count &&
+         color.itemSize === 3
+     ) {
+         return color;
+     }
 
-    const color =
-        geometry.attributes?.color;
+     /*
+      * Potree may use RGBA for loaded point colors.
+      * If it exists, use that existing GPU-managed attribute.
+      */
+     const rgba = geometry.attributes?.rgba;
 
-    if (
-        color &&
-        color.count === count &&
-        color.itemSize === 3
-    ) {
-        return color;
-    }
+     if (
+         rgba &&
+         rgba.count === count &&
+         (rgba.itemSize === 3 ||
+             rgba.itemSize === 4)
+     ) {
+         return rgba;
+     }
 
-    /*
-     * Potree may use RGBA for loaded point colors.
-     * If it exists, use that existing GPU-managed attribute.
-     */
-    const rgba =
-        geometry.attributes?.rgba;
+     console.warn(
+         "[swiss-copc] No existing Potree RGB/RGBA attribute found.",
+         Object.keys(geometry.attributes || {})
+     );
 
-    if (
-        rgba &&
-        rgba.count === count &&
-        (rgba.itemSize === 3 ||
-         rgba.itemSize === 4)
-    ) {
-        return rgba;
-    }
-
-    console.warn(
-        "[swiss-copc] No existing Potree RGB/RGBA attribute found.",
-        Object.keys(geometry.attributes || {})
-    );
-
-    return null;
-}
+     return null;
+ }
 
 /* ============================================================
    COLOR ONE POTREE GEOMETRY

@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("A_4");
+ setStatus("A_5");
 
 
 
@@ -1666,7 +1666,7 @@ function configurePointCloud(
      */
     applyColorMode(
         pointcloud,
-        "intensity"
+        "SWISSIMAGE_RGB"
     );
 
 

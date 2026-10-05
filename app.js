@@ -151,50 +151,6 @@ map = L.map("map", {
 );
 
 // ------------------------------------------------------------
-// Basemaps
-// ------------------------------------------------------------
-
-const swissTopo = L.tileLayer(
-    "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg",
-    {
-        maxZoom: 20,
-        attribution: "© swisstopo"
-    }
-);
-
-const swissTopoGrey = L.tileLayer(
-    "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg",
-    {
-        maxZoom: 20,
-        attribution: "© swisstopo"
-    }
-);
-
-const swissImage = L.tileLayer(
-    "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage-product/default/current/3857/{z}/{x}/{y}.jpeg",
-    {
-        maxZoom: 20,
-        attribution: "© swisstopo"
-    }
-);
-
-// Start with grey
-swissTopoGrey.addTo(map);
-
-L.control.layers(
-    {
-        "SwissTopo": swissTopo,
-        "SwissTopo grey": swissTopoGrey,
-        "SWISSIMAGE": swissImage
-    },
-    null,
-    {
-        collapsed: true,
-        position: "topright"
-    }
-).addTo(map);
-
-// ------------------------------------------------------------
 // Tile footprint panes
 // ------------------------------------------------------------
 

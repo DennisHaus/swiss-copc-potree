@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("B_14");
+ setStatus("B_15");
 
  proj4.defs(
      "EPSG:2056",
@@ -207,7 +207,7 @@ function initPotree() {
 
     viewer.setPointBudget(
         CONFIG.POINT_BUDGET ||
-        2000000
+        20000000
     );
 
 

@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_18");
+ setStatus("d_19");
 
 
 
@@ -2630,6 +2630,25 @@ function yieldToBrowser() {
                const iy = Math.floor(
                    (raster.worldMaxY - mercator[1]) * scaleY
                );
+
+               if (i === 0) {
+    console.log("[swiss-copc] raster pixel check", {
+        mercator,
+        rasterExtent: {
+            minX: raster.worldMinX,
+            maxX: raster.worldMaxX,
+            minY: raster.worldMinY,
+            maxY: raster.worldMaxY
+        },
+        pixel: [ix, iy],
+        rasterSize: [raster.width, raster.height],
+        insideRaster:
+            ix >= 0 &&
+            iy >= 0 &&
+            ix < raster.width &&
+            iy < raster.height
+    });
+}
 
                const c = i * 4;
 

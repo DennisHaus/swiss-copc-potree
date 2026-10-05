@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("B_12");
+ setStatus("B_13");
 
  proj4.defs(
      "EPSG:2056",
@@ -66,6 +66,8 @@ const loadedPointClouds = new Map();
 const tileLayers = new Map();
 
 let selectedTileKey = null;
+
+let swissImageProcessRunning = false;
 
 
 /* ============================================================
@@ -205,7 +207,7 @@ function initPotree() {
 
     viewer.setPointBudget(
         CONFIG.POINT_BUDGET ||
-        20000000
+        2000000
     );
 
 
@@ -3219,12 +3221,26 @@ function startSwissImageProcessing() {
 }
 
 async function processSwissImageRGB() {
-    if (!currentPointCloud || !currentTile) return;
-
     const selector = getEl("color-mode");
-    if (selector && selector.value !== "swissimage") return;
 
+    if (
+        swissImageProcessRunning ||
+        !currentPointCloud ||
+        !currentTile ||
+        (selector && selector.value !== "swissimage")
+    ) {
+        return;
+    }
+
+    swissImageProcessRunning = true;
     showSwissImageProgress(0, 1, "Preparing SWISSIMAGE…");
+
+    // Let the browser paint the progress UI before doing work.
+    await new Promise(resolve =>
+        requestAnimationFrame(() =>
+            requestAnimationFrame(resolve)
+        )
+    );
 
     try {
         if (
@@ -3239,11 +3255,11 @@ async function processSwissImageRGB() {
         });
     } catch (error) {
         console.error("SWISSIMAGE RGB failed:", error);
-
         const message = error?.message ?? String(error);
         setStatus(`SWISSIMAGE RGB failed: ${message}`);
     } finally {
         hideSwissImageProgress();
+        swissImageProcessRunning = false;
     }
 }
 
@@ -3341,61 +3357,46 @@ async function prepareSwissImageRaster() {
                 ne
             );
 
-
-        const z =
-            SWISSIMAGE_RGB.zoom;
-
-
-        const minTile =
-            mercatorToTile(
-                sw3857[0],
-                ne3857[1],
-                z
-            );
+        const sw3857 = proj4("EPSG:2056", "EPSG:3857", sw);
+        const ne3857 = proj4("EPSG:2056", "EPSG:3857", ne);
 
 
-        const maxTile =
-            mercatorToTile(
-                ne3857[0],
-                sw3857[1],
-                z
-            );
+        const MAX_RASTER_PIXELS = 8 * 1024 * 1024; // 32 MB for RGBA canvas pixels
+const MAX_RASTER_TILES = 64;
 
+let z = SWISSIMAGE_RGB.zoom;
+let minX, maxX, minY, maxY, tilesWide, tilesHigh;
 
-        const minX =
-            Math.min(
-                minTile.x,
-                maxTile.x
-            );
+while (true) {
+    const minTile = mercatorToTile(sw3857[0], ne3857[1], z);
+    const maxTile = mercatorToTile(ne3857[0], sw3857[1], z);
 
+    minX = Math.min(minTile.x, maxTile.x);
+    maxX = Math.max(minTile.x, maxTile.x);
+    minY = Math.min(minTile.y, maxTile.y);
+    maxY = Math.max(minTile.y, maxTile.y);
 
-        const maxX =
-            Math.max(
-                minTile.x,
-                maxTile.x
-            );
+    tilesWide = maxX - minX + 1;
+    tilesHigh = maxY - minY + 1;
 
+    const tileCount = tilesWide * tilesHigh;
+    const pixelCount =
+        tilesWide * SWISSIMAGE_RGB.tileSize *
+        tilesHigh * SWISSIMAGE_RGB.tileSize;
 
-        const minY =
-            Math.min(
-                minTile.y,
-                maxTile.y
-            );
+    if (
+        tileCount <= MAX_RASTER_TILES &&
+        pixelCount <= MAX_RASTER_PIXELS
+    ) {
+        break;
+    }
 
+    if (z <= 0) {
+        throw new Error("SWISSIMAGE raster exceeds the safe size limit.");
+    }
 
-        const maxY =
-            Math.max(
-                minTile.y,
-                maxTile.y
-            );
-
-
-        const tilesWide =
-            maxX - minX + 1;
-
-
-        const tilesHigh =
-            maxY - minY + 1;
+    z--;
+}
 
 
         const canvas =
@@ -3485,6 +3486,8 @@ async function prepareSwissImageRaster() {
         await Promise.all(
             requests
         );
+
+        SWISSIMAGE_RGB.cache.clear();
 
 
         /*
@@ -3994,128 +3997,6 @@ function tileToMercator(
        }
    }
 
-/* ============================================================
-   COLOR ONE GEOMETRY
-   ============================================================ */
-
-   // Keep one pixel-data copy per raster, rather than reading from the canvas
-   // separately for every point.
-   const swissImagePixelCache = new WeakMap();
-
-   function getSwissImagePixels(raster) {
-       let imageData = swissImagePixelCache.get(raster);
-
-       if (!imageData) {
-           imageData = raster.context.getImageData(
-               0,
-               0,
-               raster.width,
-               raster.height
-           );
-
-           swissImagePixelCache.set(raster, imageData);
-       }
-
-       return imageData.data;
-   }
-
-   function colorGeometryFromSwissImage(sceneNode) {
-       const geometry = sceneNode?.geometry;
-       const raster = SWISSIMAGE_RGB.raster;
-
-       if (!geometry?.attributes?.position || !raster?.context) {
-           return false;
-       }
-
-       // Avoid recoloring the same node every time Potree calls the color pass.
-       const rasterKey = raster.tileKey ?? "current-raster";
-       geometry.userData ??= {};
-
-       if (geometry.userData.swissImageColoredFor === rasterKey) {
-           return false;
-       }
-
-       const position = geometry.attributes.position;
-       const count = position.count;
-
-       if (!count) {
-           return false;
-       }
-
-       let color = geometry.attributes.color;
-
-       if (!color || color.itemSize !== 3 || color.count !== count) {
-           color = new THREE.BufferAttribute(
-               new Float32Array(count * 3),
-               3
-           );
-
-           geometry.setAttribute("color", color);
-       }
-
-       const pixels = getSwissImagePixels(raster);
-       const positions = position.array;
-       const colors = color.array;
-       const e = sceneNode.matrixWorld.elements;
-
-       const rasterWidth = raster.width;
-       const rasterHeight = raster.height;
-       const worldWidth = raster.worldMaxX - raster.worldMinX;
-       const worldHeight = raster.worldMaxY - raster.worldMinY;
-
-       if (
-           !worldWidth ||
-           !worldHeight ||
-           !rasterWidth ||
-           !rasterHeight
-       ) {
-           return false;
-       }
-
-       const lv95 = [0, 0];
-       const pixelIndexScaleX = rasterWidth / worldWidth;
-       const pixelIndexScaleY = rasterHeight / worldHeight;
-
-       for (let i = 0; i < count; i++) {
-           const j = i * 3;
-           const x = positions[j];
-           const y = positions[j + 1];
-           const z = positions[j + 2];
-
-           // Apply the node's local-to-world transform without creating a
-           // THREE.Vector3 for every point.
-           lv95[0] = e[0] * x + e[4] * y + e[8] * z + e[12];
-           lv95[1] = e[1] * x + e[5] * y + e[9] * z + e[13];
-
-           const mercator = proj4("EPSG:2056", "EPSG:3857", lv95);
-
-           const ix = Math.floor(
-               (mercator[0] - raster.worldMinX) * pixelIndexScaleX
-           );
-
-           const iy = Math.floor(
-               (raster.worldMaxY - mercator[1]) * pixelIndexScaleY
-           );
-
-           if (ix < 0 || iy < 0 || ix >= rasterWidth || iy >= rasterHeight) {
-               colors[j] = 0.5;
-               colors[j + 1] = 0.5;
-               colors[j + 2] = 0.5;
-               continue;
-           }
-
-           const pixelOffset = (iy * rasterWidth + ix) * 4;
-
-           colors[j] = pixels[pixelOffset] / 255;
-           colors[j + 1] = pixels[pixelOffset + 1] / 255;
-           colors[j + 2] = pixels[pixelOffset + 2] / 255;
-       }
-
-       color.needsUpdate = true;
-       geometry.userData.swissImageColoredFor = rasterKey;
-
-       return true;
-   }
 
 /* ============================================================
    PLACE SEARCH

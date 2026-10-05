@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_23");
+ setStatus("d_24");
 
 
 
@@ -2707,13 +2707,23 @@ rasterExtent: {
            await yieldToBrowser();
        }
 
+       // Potree's RGB material reads the geometry attribute named "color".
+       // Reuse the same buffer that the sampler has just filled.
+       if (typeof geometry.setAttribute === "function") {
+           geometry.setAttribute("color", color);
+       } else {
+           geometry.addAttribute("color", color);
+       }
+
        color.needsUpdate = true;
 
        console.log(
-           "[swiss-copc] RGBA sample:",
-           Array.from(color.array.slice(0, 16)),
-           "version:",
-           color.version
+           "[swiss-copc] attributes after coloring:",
+           Object.keys(geometry.attributes),
+           {
+               color: geometry.attributes.color,
+               rgba: geometry.attributes.rgba
+           }
        );
 
        geometry.userData.swissImageColoredFor = rasterKey;

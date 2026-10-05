@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("B_7");
+ setStatus("B_8");
 
 
 
@@ -536,7 +536,7 @@ function initUI() {
        }
 
        if (colorMode) {
-           colorMode.disabled = !hasPointCloud;
+           colorMode.enabled = !hasPointCloud;
        }
    }
 
@@ -2529,50 +2529,22 @@ function clearAllPointClouds() {
    POINT CLOUD BOUNDS
    ============================================================ */
 
-function getPointCloudBounds() {
+   function getPointCloudBounds() {
+       if (!currentPointCloud || !currentPointCloud.boundingBox) {
+           return null;
+       }
 
-    if (
-        !currentPointCloud ||
-        !currentPointCloud.boundingBox
-    ) {
+       const box = currentPointCloud.boundingBox;
+       const min = box.min.clone();
+       const max = box.max.clone();
 
-        return null;
-    }
-
-
-    const box =
-        currentPointCloud.boundingBox;
-
-
-    const min =
-        box.min.clone();
-
-    const max =
-        box.max.clone();
-
-
-    return {
-
-        min,
-
-        max,
-
-        size:
-            new THREE.Vector3(
-                max.x - min.x,
-                max.y - min.y,
-                max.z - min.z
-            ),
-
-        center:
-            new THREE.Vector3(
-                (min.x + max.x) / 2,
-                (min.y + max.y) / 2,
-                (min.z + max.z) / 2
-            )
-    };
-}
-
+       return {
+           min,
+           max,
+           size: max.clone().sub(min),
+           center: min.clone().add(max).multiplyScalar(0.5)
+       };
+   }
 
 /* ============================================================
    SECTION CREATION

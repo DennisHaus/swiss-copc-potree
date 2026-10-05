@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("A_3");
+ setStatus("A_4");
 
 
 
@@ -529,7 +529,7 @@ function updateControlState() {
      */
     if (loadButton) {
 
-        loadButton.disabled =
+        loadButton.enabled =
             !hasTile ||
             hasPointCloud;
     }
@@ -537,7 +537,7 @@ function updateControlState() {
 
     if (downloadButton) {
 
-        downloadButton.disabled =
+        downloadButton.enabled =
             !hasTile;
     }
 
@@ -562,14 +562,14 @@ function updateControlState() {
 
     if (verticalButton) {
 
-        verticalButton.disabled =
+        verticalButton.enabled =
             !hasPointCloud;
     }
 
 
     if (clearSectionButton) {
 
-        clearSectionButton.disabled =
+        clearSectionButton.enabled =
             !currentSection;
     }
 }

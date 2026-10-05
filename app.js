@@ -20,9 +20,32 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("B_9");
+ setStatus("B_10");
 
+ proj4.defs(
+     "EPSG:2056",
+     "+proj=somerc +lat_0=46.95240555555556 " +
+     "+lon_0=7.439583333333333 +k_0=1 " +
+     "+x_0=2600000 +y_0=1200000 " +
+     "+ellps=bessel " +
+     "+towgs84=674.374,15.056,405.346,0,0,0,0 " +
+     "+units=m +no_defs"
+ );
 
+ if (typeof proj4 === "function") {
+     proj4.defs(
+         "EPSG:2056",
+         "+proj=somerc " +
+         "+lat_0=46.95240555555556 " +
+         "+lon_0=7.439583333333333 " +
+         "+k_0=1 " +
+         "+x_0=2600000 " +
+         "+y_0=1200000 " +
+         "+ellps=bessel " +
+         "+towgs84=674.374,15.056,405.346,0,0,0,0 " +
+         "+units=m +no_defs"
+     );
+ }
 
 /* ============================================================
    GLOBAL STATE
@@ -165,12 +188,14 @@ function initPotree() {
      */
     try {
         viewer.setBackground("black");
-    } catch (error) {
-        console.warn(
-            "Could not set Potree background:",
-            error
-        );
-    }
+      } catch (error) {
+          console.error("SWISSIMAGE RGB failed:", error);
+
+          const message =
+              error?.message ?? String(error);
+
+          setStatus(`SWISSIMAGE RGB failed: ${message}`);
+      }
 
 
     viewer.setEDLEnabled(true);
@@ -2750,7 +2775,8 @@ function createSectionControls() {
             <div class="section-type">
                 Horizontal section
             </div>
-
+</br>
+</br>
             <label>
                 Height
                 <span id="section-position-value">
@@ -2769,7 +2795,8 @@ function createSectionControls() {
                 )}"
                 value="${value}"
             >
-
+</br>
+</br>
             <label>
                 Thickness
                 <span id="section-thickness-value">

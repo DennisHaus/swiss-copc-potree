@@ -1,4 +1,4 @@
-code = r'''"use strict";
+code = "use strict";
 
 /*
  * SwissTopo swissSURFACE3D COPC viewer

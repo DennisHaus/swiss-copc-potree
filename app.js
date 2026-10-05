@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("B_8");
+ setStatus("B_9");
 
 
 
@@ -496,49 +496,28 @@ function initUI() {
    ============================================================ */
 
    function updateControlState() {
-       const loadButton = getEl("load-button");
-       const unloadButton = getEl("unload-button");
-       const downloadButton = getEl("download-button");
+    const hasTile = !!currentTile;
+    const hasPointCloud = !!currentPointCloud;
+    const hasSection = !!currentSection;
 
-       const horizontalButton = getEl("horizontal-section-button");
-       const verticalButton = getEl("vertical-section-button");
-       const clearSectionButton = getEl("clear-section-button");
+    const loadButton = getEl("load-button");
+    const unloadButton = getEl("unload-button");
+    const downloadButton = getEl("download-button");
+    const horizontalButton = getEl("horizontal-section-button");
+    const verticalButton = getEl("vertical-section-button");
+    const clearSectionButton = getEl("clear-section-button");
+    const colorMode = getEl("color-mode");
 
-       const colorMode = getEl("color-mode");
-
-       const hasTile = !!currentTile;
-       const hasPointCloud = !!currentPointCloud;
-       const hasSection = !!currentSection;
-       const hasDownload = hasTile && !!getCopcUrl(currentTile);
-
-       if (loadButton) {
-           loadButton.disabled = !hasTile || hasPointCloud;
-       }
-
-       if (unloadButton) {
-           unloadButton.disabled = !hasPointCloud;
-       }
-
-       if (downloadButton) {
-           downloadButton.disabled = !hasDownload;
-       }
-
-       if (horizontalButton) {
-           horizontalButton.disabled = !hasPointCloud;
-       }
-
-       if (verticalButton) {
-           verticalButton.disabled = !hasPointCloud;
-       }
-
-       if (clearSectionButton) {
-           clearSectionButton.disabled = !hasSection;
-       }
-
-       if (colorMode) {
-           colorMode.enabled = !hasPointCloud;
-       }
-   }
+    if (loadButton) loadButton.disabled = !hasTile || hasPointCloud;
+    if (unloadButton) unloadButton.disabled = !hasPointCloud;
+    if (downloadButton) {
+        downloadButton.disabled = !hasTile || !getCopcUrl(currentTile);
+    }
+    if (horizontalButton) horizontalButton.disabled = !hasPointCloud;
+    if (verticalButton) verticalButton.disabled = !hasPointCloud;
+    if (clearSectionButton) clearSectionButton.disabled = !hasSection;
+    if (colorMode) colorMode.disabled = !hasPointCloud;
+}
 
 /* ============================================================
    STAC TILE SEARCH
@@ -1532,6 +1511,11 @@ async function loadSelectedTile() {
                         setStatus(
                             "COPC loaded."
                         );
+                        console.log({
+    pointCloud: !!swissCOPC.currentPointCloud(),
+    dropdownCount: document.querySelectorAll("#color-mode").length,
+    dropdownDisabled: document.getElementById("color-mode")?.disabled
+});
 
 
                         /*

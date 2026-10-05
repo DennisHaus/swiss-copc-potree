@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("A_7");
+ setStatus("A_8");
 
 
 
@@ -1179,11 +1179,6 @@ function selectTile(
     updateControlState();
 
 
-    /*
-     * Keep the original convenient behaviour:
-     * automatically load the selected tile.
-     */
-    loadSelectedTile();
 }
 
 

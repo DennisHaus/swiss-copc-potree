@@ -936,3 +936,14 @@ button:disabled {
     }
 
 }
+
+
+button:not(:disabled) {
+    opacity: 1;
+    cursor: pointer;
+}
+
+button:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}

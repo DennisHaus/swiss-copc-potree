@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_9");
+ setStatus("d_10");
 
 
 
@@ -2655,6 +2655,25 @@ async function colorGeometryFromSwissImage(
                     "EPSG:3857",
                     lv95
                 );
+                if (i === start) {
+    console.log(
+        "[swiss-copc] RGB coordinate diagnostic:",
+        {
+            local: [x, y, z],
+            world: [worldX, worldY],
+            lv95: [...lv95],
+            mercator: [...mercator],
+            raster: {
+                minX: raster.worldMinX,
+                maxX: raster.worldMaxX,
+                minY: raster.worldMinY,
+                maxY: raster.worldMaxY,
+                width: raster.width,
+                height: raster.height
+            }
+        }
+    );
+}
 
             /*
              * WebMercator -> raster pixel.

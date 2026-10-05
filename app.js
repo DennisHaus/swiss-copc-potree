@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_6");
+ setStatus("d_7");
 
 
 
@@ -891,12 +891,9 @@ function applyColorMode(pointcloud, mode) {
         refreshPointCloudMaterial(pointcloud);
         updateDisplayedColorMode("swissimage");
 
-        /*
-         * If visible nodes are already available, process now.
-         * Otherwise the timer will process them when Potree
-         * has loaded them.
-         */
-        startSwissImageProcessing();
+        if (!SWISSIMAGE_RGB.processTimer) {
+            startSwissImageProcessing();
+        }
 
         return;
     }
@@ -1743,6 +1740,14 @@ async function processSwissImageRGB() {
         );
 
         setStatus("SWISSIMAGE RGB applied.");
+
+        /*
+         * Processing for this raster is complete.
+         * Do not allow the processing timer to immediately
+         * start the same operation again.
+         */
+        stopSwissImageProcessing();
+
     } catch (error) {
         console.error(
             "SWISSIMAGE RGB failed:",

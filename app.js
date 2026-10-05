@@ -27,6 +27,9 @@ let currentSection = null;
 
 const loadedPointClouds = new Map();
 
+const tileLayers = new Map();
+let selectedTileKey = null;
+
 
 /* ============================================================
    DOM HELPER
@@ -136,61 +139,67 @@ function initPotree() {
     }
 }
 
+// ------------------------------------------------------------
+// Leaflet map
+// ------------------------------------------------------------
 
-/* ============================================================
-   LEAFLET MAP
-   ============================================================ */
+const map = L.map("map", {
+    zoomControl: true,
+    attributionControl: true,
+    preferCanvas: true
+}).setView(CONFIG.MAP_CENTER, CONFIG.MAP_ZOOM);
 
-function initMap() {
-    if (!window.L) {
-        console.warn(
-            "Leaflet is not available."
-        );
-        return;
+// Dedicated panes so tile footprints are always clickable.
+map.createPane("tileFootprints");
+map.getPane("tileFootprints").style.zIndex = 650;
+
+map.createPane("tileHighlight");
+map.getPane("tileHighlight").style.zIndex = 660;
+
+// ------------------------------------------------------------
+// SwissTopo basemaps
+// ------------------------------------------------------------
+
+const swissTopo = L.tileLayer(
+    "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg",
+    {
+        maxZoom: 20,
+        attribution: "© swisstopo"
     }
+);
 
-    const mapElement = getEl("map");
-
-    if (!mapElement) {
-        console.warn(
-            "Missing #map."
-        );
-        return;
+const swissTopoGrey = L.tileLayer(
+    "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg",
+    {
+        maxZoom: 20,
+        attribution: "© swisstopo"
     }
+);
 
-    map = L.map(
-        mapElement,
-        {
-            zoomControl: true,
-            attributionControl: true
-        }
-    ).setView(
-        CONFIG.MAP_CENTER || [
-            46.8182,
-            8.2275
-        ],
-        CONFIG.MAP_ZOOM || 8
-    );
+const swissImage = L.tileLayer(
+    "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage-product/default/current/3857/{z}/{x}/{y}.jpeg",
+    {
+        maxZoom: 20,
+        attribution: "© swisstopo"
+    }
+);
 
-    L.tileLayer(
-        CONFIG.BASEMAP,
-        {
-            attribution:
-                CONFIG.BASEMAP_ATTRIBUTION ||
-                "© swisstopo",
+// Default
+swissTopo.addTo(map);
 
-            maxZoom: 19
-        }
-    ).addTo(map);
-
-    tileLayerGroup =
-        L.layerGroup().addTo(map);
-
-    setTimeout(() => {
-        map.invalidateSize();
-    }, 300);
-}
-
+// Small layer switcher
+L.control.layers(
+    {
+        "SwissTopo": swissTopo,
+        "SwissTopo grey": swissTopoGrey,
+        "SWISSIMAGE": swissImage
+    },
+    null,
+    {
+        collapsed: true,
+        position: "topright"
+    }
+).addTo(map);
 
 /* ============================================================
    UI INITIALIZATION
@@ -477,55 +486,102 @@ function renderTiles() {
    TILE FOOTPRINT ON MAP
    ============================================================ */
 
-function renderTileOnMap(
-    tile,
-    index
-) {
-    if (
-        !map ||
-        !tileLayerGroup
-    ) {
-        return;
-    }
+   function tileKey(tile, index) {
+       return (
+           tile.id ||
+           tile.properties?.id ||
+           tile.properties?.title ||
+           `tile-${index}`
+       );
+   }
 
-    const geometry =
-        tile.geometry;
+   function geometryFromTile(tile) {
+       if (tile.geometry) {
+           return tile.geometry;
+       }
 
-    if (!geometry) {
-        return;
-    }
+       // Fallback: create a polygon from STAC bbox
+       if (Array.isArray(tile.bbox) && tile.bbox.length >= 4) {
+           const [west, south, east, north] = tile.bbox;
 
-    try {
-        const layer =
-            L.geoJSON(
-                geometry,
-                {
-                    style: {
-                        color: "#00ffff",
-                        weight: 1,
-                        fillOpacity: 0.05
-                    }
-                }
-            );
+           return {
+               type: "Polygon",
+               coordinates: [[
+                   [west, south],
+                   [east, south],
+                   [east, north],
+                   [west, north],
+                   [west, south]
+               ]]
+           };
+       }
 
-        layer.on(
-            "click",
-            () => {
-                selectTile(tile);
-            }
-        );
+       return null;
+   }
 
-        layer.addTo(
-            tileLayerGroup
-        );
+   function renderTileOnMap(tile, index) {
+       const geometry = geometryFromTile(tile);
 
-    } catch (error) {
-        console.warn(
-            "Could not render tile footprint:",
-            error
-        );
-    }
-}
+       if (!geometry) {
+           return null;
+       }
+
+       const key = tileKey(tile, index);
+
+       const layer = L.geoJSON(geometry, {
+           pane: "tileFootprints",
+
+           interactive: true,
+
+           style: {
+               color: "#2563eb",
+               weight: 2,
+               opacity: 0.9,
+
+               // Important:
+               // a filled polygon gives us a large clickable target.
+               fill: true,
+               fillColor: "#3b82f6",
+               fillOpacity: 0.12
+           }
+       });
+
+       layer.addTo(map);
+
+       layer.on("click", function (event) {
+           L.DomEvent.stopPropagation(event);
+
+           selectTile(tile, index);
+       });
+
+       layer.on("mouseover", function () {
+           if (selectedTileKey !== key) {
+               layer.setStyle({
+                   weight: 3,
+                   color: "#60a5fa",
+                   fillColor: "#60a5fa",
+                   fillOpacity: 0.22
+               });
+           }
+
+           layer.bringToFront();
+       });
+
+       layer.on("mouseout", function () {
+           if (selectedTileKey !== key) {
+               layer.setStyle({
+                   weight: 2,
+                   color: "#2563eb",
+                   fillColor: "#3b82f6",
+                   fillOpacity: 0.12
+               });
+           }
+       });
+
+       tileLayers.set(key, layer);
+
+       return layer;
+   }
 
 
 /* ============================================================
@@ -576,43 +632,44 @@ function renderTileInList(
    SELECT TILE
    ============================================================ */
 
-function selectTile(tile) {
-    currentTile = tile;
+   function selectTile(tile, index = 0) {
+       const key = tileKey(tile, index);
 
-    const title =
-        tile.properties?.title ||
-        tile.id ||
-        "Selected tile";
+       // Reset previous selection
+       if (selectedTileKey && tileLayers.has(selectedTileKey)) {
+           const oldLayer = tileLayers.get(selectedTileKey);
 
-    const selectedTitle =
-        getEl("selected-title");
+           oldLayer.setStyle({
+               weight: 2,
+               color: "#2563eb",
+               fillColor: "#3b82f6",
+               fillOpacity: 0.12
+           });
+       }
 
-    const selectedInfo =
-        getEl("selected-info");
+       selectedTileKey = key;
 
+       // Highlight new selection
+       const layer = tileLayers.get(key);
 
-    if (selectedTitle) {
-        selectedTitle.textContent =
-            title;
-    }
+       if (layer) {
+           layer.setStyle({
+               weight: 4,
+               color: "#f59e0b",
+               fillColor: "#f59e0b",
+               fillOpacity: 0.30
+           });
 
+           layer.bringToFront();
+       }
 
-    if (selectedInfo) {
-        selectedInfo.textContent =
-            tile.id || "";
-    }
+       currentTile = tile;
 
+       updateSelectedPanel(tile);
 
-    updateSelectedAttributes(
-        []
-    );
-
-    setStatus(
-        `Selected ${title}`
-    );
-
-    loadSelectedTile();
-}
+       // Keep your existing loading behaviour
+       loadSelectedTile();
+   }
 
 
 /* ============================================================

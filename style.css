@@ -101,33 +101,49 @@ select {
    MAP
    ========================================================= */
 
-#map {
-    position: absolute;
+   #map {
+       position: absolute;
+       top: 16px;
+       left: 16px;
 
-    left: 16px;
-    top: 16px;
+       width: 40%;
+       height: 40%;
 
-    width: 40%;
-    height: 40%;
+       min-width: 300px;
+       min-height: 240px;
 
-    min-width: 280px;
-    min-height: 220px;
+       z-index: 900;
 
-    z-index: 900;
+       border-radius: 14px;
+       overflow: hidden;
 
-    background: #ddd;
+       border: 1px solid rgba(255, 255, 255, 0.75);
 
-    border:
-        2px solid rgba(255, 255, 255, 0.9);
+       box-shadow:
+           0 12px 30px rgba(0, 0, 0, 0.22),
+           0 2px 8px rgba(0, 0, 0, 0.12);
 
-    border-radius: 8px;
+       background: #eef2f5;
+   }
 
-    overflow: hidden;
-
-    box-shadow:
-        0 6px 25px rgba(0, 0, 0, 0.45);
+   #map .leaflet-control-layers {
+    border: 0;
+    border-radius: 10px;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
 }
 
+#map .leaflet-control-zoom {
+    border: 0;
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.18);
+}
+
+#map .leaflet-control-zoom a {
+    width: 32px;
+    height: 32px;
+    line-height: 32px;
+}
 
 /* =========================================================
    TOP BAR

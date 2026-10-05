@@ -180,8 +180,6 @@ document.addEventListener(
     "DOMContentLoaded",
     () => {
 
-        setStatus("B_19");
-
         initPotree();
 
         initMap();

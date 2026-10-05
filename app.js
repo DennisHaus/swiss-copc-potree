@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_16");
+ setStatus("d_17");
 
 
 
@@ -1339,19 +1339,6 @@ function getPointCloudBounds() {
 }
 
 
-console.log("[COPC coordinate metadata]", {
-    projection:
-        pointcloud.pcoGeometry?.projection ??
-        pointcloud.projection,
-    offset: pointcloud.pcoGeometry?.offset?.toArray?.(),
-    geometryBounds: box(pointcloud.pcoGeometry?.boundingBox),
-    tightGeometryBounds: box(pointcloud.pcoGeometry?.tightBoundingBox),
-    pointcloudBounds: box(pointcloud.boundingBox),
-    pointcloudPosition: pointcloud.position?.toArray?.(),
-    pointcloudMatrixWorld: pointcloud.matrixWorld?.elements
-});
-
-
 function createSection(type) {
     if (!currentPointCloud) {
         setStatus("Load a point cloud first.");
@@ -2467,310 +2454,200 @@ function yieldToBrowser() {
    COLOR ONE POTREE GEOMETRY
    ============================================================ */
 
-async function colorGeometryFromSwissImage(
-    sceneNode,
-    rasterKey,
-    onProgress = () => {}
-) {
-    const geometry =
-        sceneNode?.geometry;
+   async function colorGeometryFromSwissImage(
+       sceneNode,
+       rasterKey,
+       onProgress = () => {}
+   ) {
+       const geometry = sceneNode?.geometry;
+       const position = geometry?.attributes?.position;
+       const raster = SWISSIMAGE_RGB.raster;
 
-    const position =
-        geometry?.attributes?.position;
+       if (!geometry || !position || !raster?.context) {
+           return false;
+       }
 
-    const raster =
-        SWISSIMAGE_RGB.raster;
+       geometry.userData ??= {};
 
-    if (
-        !geometry ||
-        !position ||
-        !raster?.context
-    ) {
-        return false;
-    }
+       if (geometry.userData.swissImageColoredFor === rasterKey) {
+           return false;
+       }
 
-    geometry.userData ??= {};
+       const count = position.count;
 
-    if (
-        geometry.userData.swissImageColoredFor ===
-        rasterKey
-    ) {
-        return false;
-    }
+       if (!count) {
+           return false;
+       }
 
-    const count =
-        position.count;
+       console.log(
+           "[swiss-copc] Potree geometry attributes:",
+           Object.entries(geometry.attributes || {}).map(
+               ([name, attribute]) => ({
+                   name,
+                   count: attribute?.count,
+                   itemSize: attribute?.itemSize,
+                   type: attribute?.array?.constructor?.name
+               })
+           )
+       );
 
-    if (!count) {
-        return false;
-    }
+       // This helper requires an existing RGBA attribute.
+       const color = ensureSwissImageColorAttribute(geometry, count);
 
-    /*
-     * One RGB triplet per LiDAR point.
-     */
+       if (!color) {
+           return false;
+       }
 
-     console.log(
-     "[swiss-copc] Potree geometry attributes:",
-     Object.entries(geometry.attributes || {}).map(
-         ([name, attribute]) => ({
-             name,
-             count: attribute?.count,
-             itemSize: attribute?.itemSize,
-             type: attribute?.array?.constructor?.name
-         })
-     )
- );
+       const positions = position.array;
+       const positionItemSize = position.itemSize || 3;
+       const colors = color.array;
 
-    const color =
-        ensureSwissImageColorAttribute(
-            geometry,
-            count
-        );
+       if (typeof sceneNode.updateMatrixWorld === "function") {
+           sceneNode.updateMatrixWorld(true);
+       }
 
-    if (!color) {
-        return false;
-    }
+       const matrixWorld = sceneNode.matrixWorld;
 
-    const positions =
-        position.array;
+       if (!matrixWorld) {
+           throw new Error("Potree scene node has no matrixWorld.");
+       }
 
-    const positionItemSize =
-        position.itemSize || 3;
+       const e = matrixWorld.elements;
 
-    const colors =
-        color.array;
+       const worldWidth = raster.worldMaxX - raster.worldMinX;
+       const worldHeight = raster.worldMaxY - raster.worldMinY;
 
-    /*
-     * Potree node positions can be local to the scene node.
-     * matrixWorld converts them to the world coordinate system.
-     */
-    if (
-        typeof sceneNode.updateMatrixWorld ===
-        "function"
-    ) {
-        sceneNode.updateMatrixWorld(true);
-    }
+       if (
+           !Number.isFinite(worldWidth) ||
+           !Number.isFinite(worldHeight) ||
+           worldWidth <= 0 ||
+           worldHeight <= 0
+       ) {
+           throw new Error("Invalid SWISSIMAGE raster world extent.");
+       }
 
-    const matrixWorld =
-        sceneNode.matrixWorld;
+       const scaleX = raster.width / worldWidth;
+       const scaleY = raster.height / worldHeight;
+       const lv95 = [0, 0];
 
-    if (!matrixWorld) {
-        throw new Error(
-            "Potree scene node has no matrixWorld."
-        );
-    }
+       for (
+           let start = 0;
+           start < count;
+           start += SWISSIMAGE_BATCH_SIZE
+       ) {
+           const end = Math.min(
+               start + SWISSIMAGE_BATCH_SIZE,
+               count
+           );
 
-    const e =
-        matrixWorld.elements;
+           for (let i = start; i < end; i++) {
+               const j = i * positionItemSize;
 
-    /*
-     * The point cloud is assumed to be in LV95 world
-     * coordinates after matrixWorld.
-     */
-    const worldWidth =
-        raster.worldMaxX -
-        raster.worldMinX;
+               const x = positions[j];
+               const y = positions[j + 1];
+               const z = positionItemSize >= 3
+                   ? positions[j + 2]
+                   : 0;
 
-    const worldHeight =
-        raster.worldMaxY -
-        raster.worldMinY;
+               // THREE.Matrix4 elements are column-major.
+               const worldX =
+                   e[0] * x +
+                   e[4] * y +
+                   e[8] * z +
+                   e[12];
 
-    if (
-        !Number.isFinite(worldWidth) ||
-        !Number.isFinite(worldHeight) ||
-        worldWidth <= 0 ||
-        worldHeight <= 0
-    ) {
-        throw new Error(
-            "Invalid SWISSIMAGE raster world extent."
-        );
-    }
+               const worldY =
+                   e[1] * x +
+                   e[5] * y +
+                   e[9] * z +
+                   e[13];
 
-    const scaleX =
-        raster.width /
-        worldWidth;
+               const worldZ =
+                   e[2] * x +
+                   e[6] * y +
+                   e[10] * z +
+                   e[14];
 
-    const scaleY =
-        raster.height /
-        worldHeight;
+               // Log the first point in this geometry once.
+               if (i === 0) {
+                   const lonLat = proj4(
+                       "EPSG:2056",
+                       "EPSG:4326",
+                       [worldX, worldY]
+                   );
 
-    const lv95 = [0, 0];
+                   console.log(
+                       "[swiss-copc] sampling transform",
+                       {
+                           local: [x, y, z],
+                           matrixWorld: Array.from(e),
+                           worldLV95: [worldX, worldY, worldZ],
+                           lonLat,
+                           tileBbox: currentTile?.bbox
+                       }
+                   );
+               }
 
-    for (
-        let start = 0;
-        start < count;
-        start += SWISSIMAGE_BATCH_SIZE
-    ) {
-        const end =
-            Math.min(
-                start +
-                SWISSIMAGE_BATCH_SIZE,
-                count
-            );
+               lv95[0] = worldX;
+               lv95[1] = worldY;
 
-        for (
-            let i = start;
-            i < end;
-            i++
-        ) {
-            const j =
-                i *
-                positionItemSize;
+               // LV95 -> Web Mercator.
+               const mercator = proj4(
+                   "EPSG:2056",
+                   "EPSG:3857",
+                   lv95
+               );
 
-            const x =
-                positions[j];
+               // Web Mercator -> raster pixel. Raster Y starts at the top.
+               const ix = Math.floor(
+                   (mercator[0] - raster.worldMinX) * scaleX
+               );
 
-            const y =
-                positions[j + 1];
+               const iy = Math.floor(
+                   (raster.worldMaxY - mercator[1]) * scaleY
+               );
 
-            const z =
-                positionItemSize >= 3
-                    ? positions[j + 2]
-                    : 0;
+               const c = i * 4;
 
-            /*
-             * THREE.Matrix4 is column-major.
-             */
-             if (i === start) {
-                 console.log(
-                     "[swiss-copc] Point-cloud matrix diagnostic:",
-                     {
-                         matrix: Array.from(e),
-                         translation: [
-                             e[12],
-                             e[13],
-                             e[14]
-                         ],
-                         local: [x, y, z]
-                     }
-                 );
-             }
+               if (
+                   ix < 0 ||
+                   iy < 0 ||
+                   ix >= raster.width ||
+                   iy >= raster.height
+               ) {
+                   colors[c] = 128;
+                   colors[c + 1] = 128;
+                   colors[c + 2] = 128;
+                   colors[c + 3] = 255;
+                   continue;
+               }
 
+               const rgb = getSwissImagePixel(raster, ix, iy);
 
-            const worldX =
-                e[0] * x +
-                e[4] * y +
-                e[8] * z +
-                e[12];
+               colors[c] = rgb[0];
+               colors[c + 1] = rgb[1];
+               colors[c + 2] = rgb[2];
+               colors[c + 3] = 255;
+           }
 
-            const worldY =
-                e[1] * x +
-                e[5] * y +
-                e[9] * z +
-                e[13];
+           onProgress(end);
+           await yieldToBrowser();
+       }
 
-                if (i === start) {
-    const lonLat = proj4(
-        "EPSG:2056",
-        "EPSG:4326",
-        [worldX, worldY]
-    );
+       color.needsUpdate = true;
 
-}
+       console.log(
+           "[swiss-copc] RGBA sample:",
+           Array.from(color.array.slice(0, 16)),
+           "version:",
+           color.version
+       );
 
-console.log("[swiss-copc] sampling transform", {
-    local: [x, y, z],
-    matrixWorld: sceneNode.matrixWorld.elements,
-    worldLV95: [world.x, world.y, world.z],
-    lonLat,
-    tileBbox: currentTile.bbox
-});
+       geometry.userData.swissImageColoredFor = rasterKey;
 
-            lv95[0] = worldX;
-            lv95[1] = worldY;
+       return true;
+   }
 
-            /*
-             * LV95 -> WebMercator.
-             */
-            const mercator =
-                proj4(
-                    "EPSG:2056",
-                    "EPSG:3857",
-                    lv95
-                );
-
-
-
-
-            /*
-             * WebMercator -> raster pixel.
-             *
-             * Raster origin is top-left, so Y is inverted.
-             */
-            const ix =
-                Math.floor(
-                    (
-                        mercator[0] -
-                        raster.worldMinX
-                    ) *
-                    scaleX
-                );
-
-            const iy =
-                Math.floor(
-                    (
-                        raster.worldMaxY -
-                        mercator[1]
-                    ) *
-                    scaleY
-                );
-
-                const c =
-        i * 4;
-
-    if (
-        ix < 0 ||
-        iy < 0 ||
-        ix >= raster.width ||
-        iy >= raster.height
-    ) {
-        colors[c] = 128;
-        colors[c + 1] = 128;
-        colors[c + 2] = 128;
-        colors[c + 3] = 255;
-        continue;
-    }
-
-    const rgb =
-        getSwissImagePixel(
-            raster,
-            ix,
-            iy
-        );
-
-    colors[c] =
-        rgb[0];
-
-    colors[c + 1] =
-        rgb[1];
-
-    colors[c + 2] =
-        rgb[2];
-
-    colors[c + 3] =
-        255;
-
-}
-        onProgress(end);
-
-        await yieldToBrowser();
-    }
-
-    console.log(
-        "[swiss-copc] RGBA sample:",
-        Array.from(
-            color.array.slice(0, 16)
-        ),
-        "version:",
-        color.version
-    );
-    color.needsUpdate = true;
-
-    geometry.userData.swissImageColoredFor =
-        rasterKey;
-
-    return true;
-}
 
 /* ============================================================
    COLOR VISIBLE NODES

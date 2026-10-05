@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("B_17");
+ setStatus("B_18");
 
  proj4.defs(
      "EPSG:2056",
@@ -3834,6 +3834,17 @@ function tileToMercator(
    async function colorGeometryFromSwissImage(sceneNode, rasterKey, onProgress) {
        const geometry = sceneNode?.geometry;
        const position = geometry?.attributes?.position;
+       const a = geometry?.attributes?.rgba;
+
+console.log("Geometry attribute check:", {
+    positionCount: position?.count,
+    rgbaCount: a?.count,
+    rgbaArrayLength: a?.array?.length,
+    rgbaItemSize: a?.itemSize,
+    rgbaNormalized: a?.normalized,
+    rgbaBytesPerPosition:
+        position?.count ? a?.array?.length / position.count : null,
+});
        const raster = SWISSIMAGE_RGB.raster;
 
        if (!position || !raster?.context) return false;

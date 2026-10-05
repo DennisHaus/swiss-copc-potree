@@ -75,7 +75,6 @@ function escapeHtml(value) {
 
 document.addEventListener("DOMContentLoaded", () => {
     initPotree();
-    initMap();
     initUI();
 
     setStatus("Ready");

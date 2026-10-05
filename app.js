@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_21");
+ setStatus("d_22");
 
 
 
@@ -2655,14 +2655,10 @@ rasterExtent: {
                );
 
                if (i === 0) {
-    console.log("[swiss-copc] raster pixel check", {
+    console.log("[swiss-copc] final sample check", {
+        lonLat,
         mercator,
-        rasterExtent: {
-            minX: raster.worldMinX,
-            maxX: raster.worldMaxX,
-            minY: raster.worldMinY,
-            maxY: raster.worldMaxY
-        },
+        tileBbox: currentTile?.bbox,
         pixel: [ix, iy],
         rasterSize: [raster.width, raster.height],
         insideRaster:

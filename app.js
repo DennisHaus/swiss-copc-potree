@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_17");
+ setStatus("d_18");
 
 
 
@@ -2568,25 +2568,49 @@ function yieldToBrowser() {
                    e[10] * z +
                    e[14];
 
-               // Log the first point in this geometry once.
-               if (i === 0) {
-                   const lonLat = proj4(
-                       "EPSG:2056",
-                       "EPSG:4326",
-                       [worldX, worldY]
-                   );
+                   // Diagnostic: test whether this point falls inside the tile
+    // when interpreted as LV95 or Web Mercator.
+    if (i === 0) {
+        const rawXY = [worldX, worldY];
+        const tileBbox = currentTile?.bbox;
 
-                   console.log(
-                       "[swiss-copc] sampling transform",
-                       {
-                           local: [x, y, z],
-                           matrixWorld: Array.from(e),
-                           worldLV95: [worldX, worldY, worldZ],
-                           lonLat,
-                           tileBbox: currentTile?.bbox
-                       }
-                   );
-               }
+        const asLV95 = proj4(
+            "EPSG:2056",
+            "EPSG:4326",
+            rawXY
+        );
+
+        const asWebMercator = proj4(
+            "EPSG:3857",
+            "EPSG:4326",
+            rawXY
+        );
+
+        const insideBbox = (lonLat, bbox) => {
+            if (!Array.isArray(bbox) || bbox.length < 4) {
+                return null;
+            }
+
+            const [lon, lat] = lonLat;
+            const [west, south, east, north] = bbox;
+
+            return (
+                lon >= west && lon <= east &&
+                lat >= south && lat <= north
+            );
+        };
+
+        console.log("[swiss-copc] CRS check", {
+            local: [x, y, z],
+            matrixWorld: Array.from(e),
+            rawXY,
+            asLV95_lonLat: asLV95,
+            asLV95_insideTile: insideBbox(asLV95, tileBbox),
+            as3857_lonLat: asWebMercator,
+            as3857_insideTile: insideBbox(asWebMercator, tileBbox),
+            tileBbox
+        });
+    }
 
                lv95[0] = worldX;
                lv95[1] = worldY;

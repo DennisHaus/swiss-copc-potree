@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_11");
+ setStatus("d_12");
 
 
 
@@ -1817,6 +1817,11 @@ async function prepareSwissImageRaster() {
             east,
             north
         ] = currentTile.bbox;
+
+        console.log(
+    "[swiss-copc] currentTile bbox:",
+    currentTile.bbox
+);
 
         /*
          * WGS84 -> LV95.

@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_13");
+ setStatus("d_14");
 
 
 
@@ -1357,6 +1357,20 @@ function getPointCloudBounds() {
     };
 }
 
+
+console.log("[COPC coordinate metadata]", {
+    projection:
+        pointcloud.pcoGeometry?.projection ??
+        pointcloud.projection,
+    offset: pointcloud.pcoGeometry?.offset?.toArray?.(),
+    geometryBounds: box(pointcloud.pcoGeometry?.boundingBox),
+    tightGeometryBounds: box(pointcloud.pcoGeometry?.tightBoundingBox),
+    pointcloudBounds: box(pointcloud.boundingBox),
+    pointcloudPosition: pointcloud.position?.toArray?.(),
+    pointcloudMatrixWorld: pointcloud.matrixWorld?.elements
+});
+
+
 function createSection(type) {
     if (!currentPointCloud) {
         setStatus("Load a point cloud first.");
@@ -2671,12 +2685,6 @@ async function colorGeometryFromSwissImage(
         [worldX, worldY]
     );
 
-    console.log("[alignment check]", {
-        localPoint: [x, y, z],
-        transformedWorld: [worldX, worldY],
-        interpretedAsLV95_lonLat: lonLat, // [longitude, latitude]
-        selectedTileBbox: currentTile.bbox
-    });
 }
 
             lv95[0] = worldX;

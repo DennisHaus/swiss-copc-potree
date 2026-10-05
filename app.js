@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_25");
+ setStatus("d_27");
 
 
 
@@ -2725,6 +2725,23 @@ rasterExtent: {
                rgba: geometry.attributes.rgba
            }
        );
+
+       const colorAttr = geometry.attributes.color;
+const rgbaAttr = geometry.attributes.rgba;
+const material = currentPointCloud?.material;
+
+console.log("[swiss-copc] render check", {
+    colorAndRgbaAreSameAttribute: colorAttr === rgbaAttr,
+    colorItemSize: colorAttr?.itemSize,
+    colorNormalized: colorAttr?.normalized,
+    firstColorValues: colorAttr
+        ? Array.from(colorAttr.array.slice(0, 16))
+        : null,
+    pointColorType: material?.pointColorType,
+    rgbEnum: Potree.PointColorType?.RGB,
+    isRGBMode:
+        material?.pointColorType === Potree.PointColorType?.RGB
+});
 
        geometry.userData.swissImageColoredFor = rasterKey;
 

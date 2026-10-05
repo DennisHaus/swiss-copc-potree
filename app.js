@@ -9,7 +9,7 @@
  * - SwissTopo tile footprints
  * - COPC loading
  * - Elevation / intensity / classification / return modes
- * - SWISSIMAGE RGB projected vertically onto LiDAR points
+ * - SWISSIMAGE RGB projected onto LiDAR points
  * - Circular points
  * - Horizontal / vertical sections
  * - Load / unload / download controls
@@ -19,33 +19,36 @@
  * Do NOT define a global "$()" helper.
  * Potree uses jQuery's "$()" internally.
  */
+ setStatus("C_1");
 
- setStatus("B_19");
 
- proj4.defs(
-     "EPSG:2056",
-     "+proj=somerc +lat_0=46.95240555555556 " +
-     "+lon_0=7.439583333333333 +k_0=1 " +
-     "+x_0=2600000 +y_0=1200000 " +
-     "+ellps=bessel " +
-     "+towgs84=674.374,15.056,405.346,0,0,0,0 " +
-     "+units=m +no_defs"
- );
 
- if (typeof proj4 === "function") {
-     proj4.defs(
-         "EPSG:2056",
-         "+proj=somerc " +
-         "+lat_0=46.95240555555556 " +
-         "+lon_0=7.439583333333333 " +
-         "+k_0=1 " +
-         "+x_0=2600000 " +
-         "+y_0=1200000 " +
-         "+ellps=bessel " +
-         "+towgs84=674.374,15.056,405.346,0,0,0,0 " +
-         "+units=m +no_defs"
-     );
- }
+/* ============================================================
+   SAFE PROJ4 SETUP
+   ============================================================ */
+
+if (typeof proj4 === "function") {
+
+    proj4.defs(
+        "EPSG:2056",
+        "+proj=somerc " +
+        "+lat_0=46.95240555555556 " +
+        "+lon_0=7.439583333333333 " +
+        "+k_0=1 " +
+        "+x_0=2600000 " +
+        "+y_0=1200000 " +
+        "+ellps=bessel " +
+        "+towgs84=674.374,15.056,405.346,0,0,0,0 " +
+        "+units=m +no_defs"
+    );
+
+} else {
+
+    console.error(
+        "proj4 is not loaded."
+    );
+}
+
 
 /* ============================================================
    GLOBAL STATE
@@ -75,6 +78,7 @@ let swissImageProcessRunning = false;
    ============================================================ */
 
 const SWISSIMAGE_RGB = {
+
     layer:
         "ch.swisstopo.swissimage-product",
 
@@ -102,10 +106,31 @@ const SWISSIMAGE_RGB = {
 
 
 /* ============================================================
+   SWISSIMAGE PIXEL BLOCK CACHE
+   ============================================================ */
+
+const swissImageBlockCaches =
+    new WeakMap();
+
+const SWISSIMAGE_BLOCK_SIZE =
+    256;
+
+const SWISSIMAGE_MAX_CACHED_BLOCKS =
+    64;
+
+const SWISSIMAGE_BATCH_SIZE =
+    10000;
+
+let swissImageColoring =
+    false;
+
+
+/* ============================================================
    DOM HELPER
    ============================================================ */
 
 function getEl(id) {
+
     return document.getElementById(id);
 }
 
@@ -115,13 +140,20 @@ function getEl(id) {
    ============================================================ */
 
 function setStatus(message) {
-    const element = getEl("status");
+
+    const element =
+        getEl("status");
 
     if (element) {
-        element.textContent = message || "";
+
+        element.textContent =
+            message || "";
     }
 
-    console.log("[swiss-copc]", message);
+    console.log(
+        "[swiss-copc]",
+        message
+    );
 }
 
 
@@ -130,6 +162,7 @@ function setStatus(message) {
    ============================================================ */
 
 function escapeHtml(value) {
+
     return String(value ?? "")
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -146,6 +179,8 @@ function escapeHtml(value) {
 document.addEventListener(
     "DOMContentLoaded",
     () => {
+
+        setStatus("B_19");
 
         initPotree();
 
@@ -178,6 +213,18 @@ function initPotree() {
         return;
     }
 
+    if (
+        typeof Potree ===
+        "undefined"
+    ) {
+
+        console.error(
+            "Potree is not loaded."
+        );
+
+        return;
+    }
+
 
     viewer =
         new Potree.Viewer(
@@ -185,25 +232,28 @@ function initPotree() {
         );
 
 
-    /*
-     * Black Potree background.
-     */
     try {
-        viewer.setBackground("black");
-      } catch (error) {
-          console.error("SWISSIMAGE RGB failed:", error);
 
-          const message =
-              error?.message ?? String(error);
+        viewer.setBackground(
+            "black"
+        );
 
-          setStatus(`SWISSIMAGE RGB failed: ${message}`);
-      }
+    } catch (error) {
+
+        console.warn(
+            "Could not set Potree background:",
+            error
+        );
+    }
 
 
-    viewer.setEDLEnabled(true);
+    viewer.setEDLEnabled(
+        true
+    );
 
-    viewer.setFOV(60);
-
+    viewer.setFOV(
+        60
+    );
 
     viewer.setPointBudget(
         CONFIG.POINT_BUDGET ||
@@ -211,17 +261,15 @@ function initPotree() {
     );
 
 
-    /*
-     * Do not load Potree's sidebar.
-     */
     try {
+
         viewer.setClipTask(
             Potree.ClipTask.NONE
         );
+
     } catch (error) {
-        console.warn(
-            error
-        );
+
+        console.warn(error);
     }
 }
 
@@ -246,16 +294,14 @@ function initMap() {
         );
 
 
-    /*
-     * Footprint panes.
-     */
     map.createPane(
         "tileFootprints"
     );
 
     map.getPane(
         "tileFootprints"
-    ).style.zIndex = 700;
+    ).style.zIndex =
+        700;
 
 
     map.createPane(
@@ -264,12 +310,10 @@ function initMap() {
 
     map.getPane(
         "tileHighlight"
-    ).style.zIndex = 710;
+    ).style.zIndex =
+        710;
 
 
-    /*
-     * SwissTopo colour.
-     */
     const swissTopo =
         L.tileLayer(
             "https://wmts.geo.admin.ch/1.0.0/" +
@@ -282,9 +326,6 @@ function initMap() {
         );
 
 
-    /*
-     * SwissTopo grey.
-     */
     const swissTopoGrey =
         L.tileLayer(
             "https://wmts.geo.admin.ch/1.0.0/" +
@@ -297,9 +338,6 @@ function initMap() {
         );
 
 
-    /*
-     * SWISSIMAGE map layer.
-     */
     const swissImage =
         L.tileLayer(
             "https://wmts.geo.admin.ch/1.0.0/" +
@@ -312,15 +350,11 @@ function initMap() {
         );
 
 
-    /*
-     * Default background.
-     */
-    swissTopoGrey.addTo(map);
+    swissTopoGrey.addTo(
+        map
+    );
 
 
-    /*
-     * Map layer switcher.
-     */
     L.control.layers(
         {
             "SwissTopo":
@@ -384,137 +418,101 @@ function initUI() {
         getEl("download-button");
 
 
-    if (findButton) {
-
-        findButton.addEventListener(
-            "click",
-            findTilesFromMap
-        );
-    }
+    findButton?.addEventListener(
+        "click",
+        findTilesFromMap
+    );
 
 
-    if (fitButton) {
-
-        fitButton.addEventListener(
-            "click",
-            fitCurrentPointCloud
-        );
-    }
+    fitButton?.addEventListener(
+        "click",
+        fitCurrentPointCloud
+    );
 
 
-    if (clearButton) {
-
-        clearButton.addEventListener(
-            "click",
-            clearAllPointClouds
-        );
-    }
+    clearButton?.addEventListener(
+        "click",
+        clearAllPointClouds
+    );
 
 
-    if (searchButton) {
-
-        searchButton.addEventListener(
-            "click",
-            searchPlace
-        );
-    }
+    searchButton?.addEventListener(
+        "click",
+        searchPlace
+    );
 
 
-    if (searchInput) {
+    searchInput?.addEventListener(
+        "keydown",
+        event => {
 
-        searchInput.addEventListener(
-            "keydown",
-            event => {
+            if (
+                event.key ===
+                "Enter"
+            ) {
 
-                if (event.key === "Enter") {
-                    searchPlace();
-                }
+                searchPlace();
             }
-        );
-    }
+        }
+    );
 
 
-    if (colorMode) {
+    colorMode?.addEventListener(
+        "change",
+        () => {
 
-        colorMode.addEventListener(
-            "change",
-            () => {
-
-                if (!currentPointCloud) {
-                    return;
-                }
-
-                applyColorMode(
-                    currentPointCloud,
-                    colorMode.value
-                );
+            if (!currentPointCloud) {
+                return;
             }
-        );
-    }
+
+            applyColorMode(
+                currentPointCloud,
+                colorMode.value
+            );
+        }
+    );
 
 
-    if (horizontalButton) {
-
-        horizontalButton.addEventListener(
-            "click",
-            () => {
-
-                createSection(
-                    "horizontal"
-                );
-            }
-        );
-    }
+    horizontalButton?.addEventListener(
+        "click",
+        () =>
+            createSection(
+                "horizontal"
+            )
+    );
 
 
-    if (verticalButton) {
-
-        verticalButton.addEventListener(
-            "click",
-            () => {
-
-                createSection(
-                    "vertical"
-                );
-            }
-        );
-    }
+    verticalButton?.addEventListener(
+        "click",
+        () =>
+            createSection(
+                "vertical"
+            )
+    );
 
 
-    if (clearSectionButton) {
-
-        clearSectionButton.addEventListener(
-            "click",
-            clearSection
-        );
-    }
+    clearSectionButton?.addEventListener(
+        "click",
+        clearSection
+    );
 
 
-    if (loadButton) {
-
-        loadButton.addEventListener(
-            "click",
-            loadSelectedTile
-        );
-    }
+    loadButton?.addEventListener(
+        "click",
+        loadSelectedTile
+    );
 
 
-    if (unloadButton) {
-
-        unloadButton.addEventListener(
-            "click",
-            unloadCurrentPointCloud
-        );
-    }
+    unloadButton?.addEventListener(
+        "click",
+        unloadCurrentPointCloud
+    );
 
 
-    if (downloadButton) {
-
-        downloadButton.addEventListener(
-            "click",
-            downloadCurrentTile
-        );
-    }
+    downloadButton?.addEventListener(
+        "click",
+        downloadCurrentTile
+    );
 }
 
 
@@ -522,29 +520,93 @@ function initUI() {
    BUTTON STATE
    ============================================================ */
 
-   function updateControlState() {
-    const hasTile = !!currentTile;
-    const hasPointCloud = !!currentPointCloud;
-    const hasSection = !!currentSection;
+function updateControlState() {
 
-    const loadButton = getEl("load-button");
-    const unloadButton = getEl("unload-button");
-    const downloadButton = getEl("download-button");
-    const horizontalButton = getEl("horizontal-section-button");
-    const verticalButton = getEl("vertical-section-button");
-    const clearSectionButton = getEl("clear-section-button");
-    const colorMode = getEl("color-mode");
+    const hasTile =
+        !!currentTile;
 
-    if (loadButton) loadButton.disabled = !hasTile || hasPointCloud;
-    if (unloadButton) unloadButton.disabled = !hasPointCloud;
-    if (downloadButton) {
-        downloadButton.disabled = !hasTile || !getCopcUrl(currentTile);
+    const hasPointCloud =
+        !!currentPointCloud;
+
+    const hasSection =
+        !!currentSection;
+
+
+    const loadButton =
+        getEl("load-button");
+
+    const unloadButton =
+        getEl("unload-button");
+
+    const downloadButton =
+        getEl("download-button");
+
+    const horizontalButton =
+        getEl("horizontal-section-button");
+
+    const verticalButton =
+        getEl("vertical-section-button");
+
+    const clearSectionButton =
+        getEl("clear-section-button");
+
+    const colorMode =
+        getEl("color-mode");
+
+
+    if (loadButton) {
+
+        loadButton.disabled =
+            !hasTile ||
+            hasPointCloud;
     }
-    if (horizontalButton) horizontalButton.disabled = !hasPointCloud;
-    if (verticalButton) verticalButton.disabled = !hasPointCloud;
-    if (clearSectionButton) clearSectionButton.disabled = !hasSection;
-    if (colorMode) colorMode.disabled = !hasPointCloud;
+
+
+    if (unloadButton) {
+
+        unloadButton.disabled =
+            !hasPointCloud;
+    }
+
+
+    if (downloadButton) {
+
+        downloadButton.disabled =
+            !hasTile ||
+            !getCopcUrl(
+                currentTile
+            );
+    }
+
+
+    if (horizontalButton) {
+
+        horizontalButton.disabled =
+            !hasPointCloud;
+    }
+
+
+    if (verticalButton) {
+
+        verticalButton.disabled =
+            !hasPointCloud;
+    }
+
+
+    if (clearSectionButton) {
+
+        clearSectionButton.disabled =
+            !hasSection;
+    }
+
+
+    if (colorMode) {
+
+        colorMode.disabled =
+            !hasPointCloud;
+    }
 }
+
 
 /* ============================================================
    STAC TILE SEARCH
@@ -567,26 +629,15 @@ async function findTilesFromMap() {
 
 
     const bbox = [
+
         bounds.getWest(),
+
         bounds.getSouth(),
+
         bounds.getEast(),
+
         bounds.getNorth()
     ];
-
-
-    console.log(
-        "=== STAC TILE SEARCH ==="
-    );
-
-    console.log(
-        "Map bounds:",
-        bounds
-    );
-
-    console.log(
-        "BBOX:",
-        bbox
-    );
 
 
     setStatus(
@@ -620,24 +671,13 @@ async function findTilesFromMap() {
         );
 
 
-        console.log(
-            "STAC URL:",
-            url.toString()
-        );
-
-
         const response =
-            await fetch(url);
+            await fetch(
+                url
+            );
 
 
         if (!response.ok) {
-
-            const text =
-                await response.text();
-
-            console.error(
-                text
-            );
 
             throw new Error(
                 `STAC request failed: ${response.status}`
@@ -650,15 +690,11 @@ async function findTilesFromMap() {
 
 
         currentTiles =
-            Array.isArray(data.features)
+            Array.isArray(
+                data.features
+            )
                 ? data.features
                 : [];
-
-
-        console.log(
-            "STAC tiles:",
-            currentTiles.length
-        );
 
 
         renderTiles();
@@ -697,7 +733,9 @@ function renderTiles() {
 
 
     if (list) {
-        list.innerHTML = "";
+
+        list.innerHTML =
+            "";
     }
 
 
@@ -712,10 +750,13 @@ function renderTiles() {
 
     for (
         const layer of
-            tileLayers.values()
+        tileLayers.values()
     ) {
 
-        if (map.hasLayer(layer)) {
+        if (
+            map &&
+            map.hasLayer(layer)
+        ) {
 
             map.removeLayer(
                 layer
@@ -726,18 +767,12 @@ function renderTiles() {
 
     tileLayers.clear();
 
-    selectedTileKey = null;
+    selectedTileKey =
+        null;
 
 
-    if (
-        currentTiles.length === 0
-    ) {
-
-        return;
-    }
-
-
-    const footprintLayers = [];
+    const footprintLayers =
+        [];
 
 
     currentTiles.forEach(
@@ -767,7 +802,8 @@ function renderTiles() {
 
 
     if (
-        footprintLayers.length > 0
+        footprintLayers.length &&
+        map
     ) {
 
         const group =
@@ -795,15 +831,12 @@ function renderTileOnMap(
 ) {
 
     const geometry =
-        geometryFromTile(tile);
+        geometryFromTile(
+            tile
+        );
 
 
     if (!geometry) {
-
-        console.warn(
-            "No geometry for tile:",
-            tile
-        );
 
         return null;
     }
@@ -827,6 +860,7 @@ function renderTileOnMap(
                     true,
 
                 style: {
+
                     color:
                         "#0066ff",
 
@@ -846,7 +880,9 @@ function renderTileOnMap(
         );
 
 
-    layer.addTo(map);
+    layer.addTo(
+        map
+    );
 
 
     layer.on(
@@ -875,6 +911,7 @@ function renderTileOnMap(
             ) {
 
                 layer.setStyle({
+
                     color:
                         "#00a8ff",
 
@@ -905,6 +942,7 @@ function renderTileOnMap(
             ) {
 
                 layer.setStyle({
+
                     color:
                         "#0066ff",
 
@@ -942,10 +980,10 @@ function tileKey(
 ) {
 
     return (
-        tile.id ||
-        tile.properties?.id ||
-        tile.properties?.title ||
-        tile.properties?.name ||
+        tile?.id ||
+        tile?.properties?.id ||
+        tile?.properties?.title ||
+        tile?.properties?.name ||
         `tile-${index}`
     );
 }
@@ -955,14 +993,10 @@ function geometryFromTile(
     tile
 ) {
 
-    /*
-     * Use bbox first.
-     *
-     * STAC geometry can represent the item
-     * center rather than the complete tile.
-     */
     if (
-        Array.isArray(tile.bbox) &&
+        Array.isArray(
+            tile?.bbox
+        ) &&
         tile.bbox.length >= 4
     ) {
 
@@ -976,10 +1010,12 @@ function geometryFromTile(
 
 
         return {
+
             type:
                 "Polygon",
 
             coordinates: [[
+
                 [
                     west,
                     south
@@ -1009,13 +1045,8 @@ function geometryFromTile(
     }
 
 
-    if (tile.geometry) {
-
-        return tile.geometry;
-    }
-
-
-    return null;
+    return tile?.geometry ||
+        null;
 }
 
 
@@ -1051,25 +1082,19 @@ function renderTileInList(
         "tile-item";
 
 
-    const name =
-        tile.properties?.title ||
-        tile.id ||
-        `Tile ${index + 1}`;
-
-
     item.textContent =
-        name;
+        tile?.properties?.title ||
+        tile?.id ||
+        `Tile ${index + 1}`;
 
 
     item.addEventListener(
         "click",
-        () => {
-
+        () =>
             selectTile(
                 tile,
                 index
-            );
-        }
+            )
     );
 
 
@@ -1095,9 +1120,6 @@ function selectTile(
         );
 
 
-    /*
-     * Reset previous footprint.
-     */
     if (
         selectedTileKey &&
         tileLayers.has(
@@ -1106,8 +1128,11 @@ function selectTile(
     ) {
 
         tileLayers
-            .get(selectedTileKey)
+            .get(
+                selectedTileKey
+            )
             .setStyle({
+
                 weight:
                     3,
 
@@ -1127,9 +1152,6 @@ function selectTile(
         key;
 
 
-    /*
-     * Highlight current tile.
-     */
     const layer =
         tileLayers.get(
             key
@@ -1139,6 +1161,7 @@ function selectTile(
     if (layer) {
 
         layer.setStyle({
+
             weight:
                 5,
 
@@ -1173,8 +1196,40 @@ function selectTile(
     }
 
 
+    /*
+     * If a different point cloud is already active,
+     * do not silently replace it.
+     */
+    if (
+        currentPointCloud &&
+        currentTile &&
+        getCopcUrl(currentTile) !==
+        getCopcUrl(tile)
+    ) {
+
+        setStatus(
+            "Unload the current point cloud before loading another tile."
+        );
+
+        return;
+    }
+
+
     currentTile =
         tile;
+
+
+    /*
+     * A new tile means a new raster.
+     */
+    if (
+        SWISSIMAGE_RGB.raster &&
+        SWISSIMAGE_RGB.raster.tileKey !== key
+    ) {
+
+        SWISSIMAGE_RGB.raster =
+            null;
+    }
 
 
     updateSelectedPanel(
@@ -1186,8 +1241,7 @@ function selectTile(
 
 
     /*
-     * Keep the original convenient behaviour:
-     * automatically load the selected tile.
+     * Keep automatic loading behaviour.
      */
     loadSelectedTile();
 }
@@ -1256,14 +1310,17 @@ function updateSelectedPanel(
 
 
         const assets =
-            tile?.assets || {};
+            tile?.assets ||
+            {};
 
 
         for (
             const [
                 key,
                 asset
-            ] of Object.entries(assets)
+            ] of Object.entries(
+                assets
+            )
         ) {
 
             const row =
@@ -1308,8 +1365,7 @@ function getCopcUrl(
 ) {
 
     if (
-        !tile ||
-        !tile.assets
+        !tile?.assets
     ) {
 
         return null;
@@ -1342,9 +1398,8 @@ function getCopcUrl(
 
 
         const text =
-            (
-                `${key} ${href} ${type} ${roles.join(" ")}`
-            ).toLowerCase();
+            `${key} ${href} ${type} ${roles.join(" ")}`
+                .toLowerCase();
 
 
         if (
@@ -1360,7 +1415,8 @@ function getCopcUrl(
 
 
     for (
-        const asset of Object.values(
+        const asset of
+        Object.values(
             tile.assets
         )
     ) {
@@ -1481,7 +1537,7 @@ async function loadSelectedTile() {
                     copcUrl,
 
                     currentTile.id ||
-                        "swissSURFACE3D",
+                    "swissSURFACE3D",
 
                     event => {
 
@@ -1538,16 +1594,8 @@ async function loadSelectedTile() {
                         setStatus(
                             "COPC loaded."
                         );
-                        console.log({
-    pointCloud: !!swissCOPC.currentPointCloud(),
-    dropdownCount: document.querySelectorAll("#color-mode").length,
-    dropdownDisabled: document.getElementById("color-mode")?.disabled
-});
 
 
-                        /*
-                         * Start SWISSIMAGE processing.
-                         */
                         startSwissImageProcessing();
 
 
@@ -1560,6 +1608,7 @@ async function loadSelectedTile() {
     } catch (error) {
 
         console.error(
+            "COPC loading failed:",
             error
         );
 
@@ -1583,7 +1632,7 @@ function configurePointCloud(
 ) {
 
     const material =
-        pointcloud.material;
+        pointcloud?.material;
 
 
     if (!material) {
@@ -1591,13 +1640,10 @@ function configurePointCloud(
     }
 
 
-    /*
-     * Circular points.
-     */
     if (
         Potree.PointShape &&
         Potree.PointShape.CIRCLE !==
-            undefined
+        undefined
     ) {
 
         material.shape =
@@ -1609,13 +1655,10 @@ function configurePointCloud(
         1.5;
 
 
-    /*
-     * Adaptive point size.
-     */
     if (
         Potree.PointSizeType &&
         Potree.PointSizeType.ADAPTIVE !==
-            undefined
+        undefined
     ) {
 
         material.pointSizeType =
@@ -1623,23 +1666,19 @@ function configurePointCloud(
     }
 
 
-    /*
-     * Intensity.
-     */
     if (
-        "intensityRange" in material
+        "intensityRange" in
+        material
     ) {
 
-        material.intensityRange = [
-            0,
-            65535
-        ];
+        material.intensityRange =
+            [
+                0,
+                65535
+            ];
     }
 
 
-    /*
-     * Start with intensity.
-     */
     applyColorMode(
         pointcloud,
         "intensity"
@@ -1664,24 +1703,20 @@ function refreshPointCloudMaterial(
     pointcloud
 ) {
 
-    if (
-        !pointcloud ||
-        !pointcloud.material
-    ) {
+    const material =
+        pointcloud?.material;
 
+
+    if (!material) {
         return;
     }
-
-
-    const material =
-        pointcloud.material;
 
 
     try {
 
         if (
             typeof material.updateShaderSource ===
-                "function"
+            "function"
         ) {
 
             material.updateShaderSource();
@@ -1711,8 +1746,7 @@ function applyColorMode(
 ) {
 
     if (
-        !pointcloud ||
-        !pointcloud.material
+        !pointcloud?.material
     ) {
 
         return;
@@ -1723,21 +1757,30 @@ function applyColorMode(
         pointcloud.material;
 
 
-    /*
-     * SWISSIMAGE RGB.
-     */
     if (
-        mode === "swissimage"
+        mode ===
+        "swissimage"
     ) {
 
         material.activeAttributeName =
             null;
 
 
-        setPointColorType(
-            material,
-            "RGB"
-        );
+        const rgbAvailable =
+            setPointColorType(
+                material,
+                "RGB"
+            );
+
+
+        if (!rgbAvailable) {
+
+            setStatus(
+                "Potree RGB color mode is unavailable."
+            );
+
+            return;
+        }
 
 
         refreshPointCloudMaterial(
@@ -1756,9 +1799,6 @@ function applyColorMode(
     }
 
 
-    /*
-     * Reset scalar attribute.
-     */
     material.activeAttributeName =
         null;
 
@@ -1771,10 +1811,11 @@ function applyColorMode(
                 "intensity";
 
 
-            material.intensityRange = [
-                0,
-                65535
-            ];
+            material.intensityRange =
+                [
+                    0,
+                    65535
+                ];
 
 
             setPointColorType(
@@ -1791,10 +1832,11 @@ function applyColorMode(
                 "intensity";
 
 
-            material.intensityRange = [
-                0,
-                65535
-            ];
+            material.intensityRange =
+                [
+                    0,
+                    65535
+                ];
 
 
             setPointColorType(
@@ -1853,14 +1895,10 @@ function applyColorMode(
                 "pointSourceID";
 
 
-            if (
-                Potree.PointColorType?.SOURCE !==
-                    undefined
-            ) {
-
-                material.pointColorType =
-                    Potree.PointColorType.SOURCE;
-            }
+            setPointColorType(
+                material,
+                "SOURCE"
+            );
 
             break;
 
@@ -1869,11 +1907,6 @@ function applyColorMode(
 
         default:
 
-            /*
-             * Potree 1.8 builds differ:
-             * some expose HEIGHT,
-             * others ELEVATION.
-             */
             material.activeAttributeName =
                 null;
 
@@ -1921,7 +1954,7 @@ function setPointColorType(
 
     if (
         Potree.PointColorType[name] ===
-            undefined
+        undefined
     ) {
 
         console.warn(
@@ -1950,7 +1983,7 @@ function setElevationColorType(
 
     if (
         Potree.PointColorType?.ELEVATION !==
-            undefined
+        undefined
     ) {
 
         material.pointColorType =
@@ -1962,7 +1995,7 @@ function setElevationColorType(
 
     if (
         Potree.PointColorType?.HEIGHT !==
-            undefined
+        undefined
     ) {
 
         material.pointColorType =
@@ -1999,15 +2032,11 @@ function setElevationRange(
     }
 
 
-    const box =
-        pointcloud.boundingBox;
-
-
     const minZ =
-        box.min.z;
+        pointcloud.boundingBox.min.z;
 
     const maxZ =
-        box.max.z;
+        pointcloud.boundingBox.max.z;
 
 
     if (
@@ -2021,13 +2050,15 @@ function setElevationRange(
 
 
     if (
-        "elevationRange" in material
+        "elevationRange" in
+        material
     ) {
 
-        material.elevationRange = [
-            minZ,
-            maxZ
-        ];
+        material.elevationRange =
+            [
+                minZ,
+                maxZ
+            ];
     }
 }
 
@@ -2063,7 +2094,8 @@ function getPointAttributes(
     pointcloud
 ) {
 
-    const result = [];
+    const result =
+        [];
 
 
     const pointAttributes =
@@ -2085,7 +2117,7 @@ function getPointAttributes(
 
         for (
             const attribute of
-                pointAttributes.attributes
+            pointAttributes.attributes
         ) {
 
             if (!attribute) {
@@ -2094,6 +2126,7 @@ function getPointAttributes(
 
 
             result.push({
+
                 name:
                     attribute.name ||
                     attribute.attributeName ||
@@ -2182,8 +2215,7 @@ function updateSelectedAttributes(
 
 
     if (
-        !attributes ||
-        attributes.length === 0
+        !attributes?.length
     ) {
 
         const item =
@@ -2211,7 +2243,7 @@ function updateSelectedAttributes(
 
     for (
         const attribute of
-            attributes
+        attributes
     ) {
 
         const item =
@@ -2306,7 +2338,8 @@ function enforcePointCloudLimit() {
 
 
     while (
-        loadedPointClouds.size >= max
+        loadedPointClouds.size >=
+        max
     ) {
 
         const first =
@@ -2336,6 +2369,33 @@ function enforcePointCloudLimit() {
 
 
 /* ============================================================
+   STOP SWISSIMAGE TIMER
+   ============================================================ */
+
+function stopSwissImageProcessing() {
+
+    if (
+        SWISSIMAGE_RGB.processTimer
+    ) {
+
+        clearInterval(
+            SWISSIMAGE_RGB.processTimer
+        );
+
+        SWISSIMAGE_RGB.processTimer =
+            null;
+    }
+
+
+    swissImageProcessRunning =
+        false;
+
+    swissImageColoring =
+        false;
+}
+
+
+/* ============================================================
    UNLOAD CURRENT
    ============================================================ */
 
@@ -2351,6 +2411,9 @@ function unloadCurrentPointCloud() {
     }
 
 
+    stopSwissImageProcessing();
+
+
     let urlToRemove =
         null;
 
@@ -2359,7 +2422,7 @@ function unloadCurrentPointCloud() {
         const [
             url,
             pointcloud
-        ] of loadedPointClouds.entries()
+        ] of loadedPointClouds
     ) {
 
         if (
@@ -2417,9 +2480,9 @@ function unloadPointCloud(
     try {
 
         if (
-            pointcloud.parent &&
+            pointcloud?.parent &&
             typeof pointcloud.parent.remove ===
-                "function"
+            "function"
         ) {
 
             pointcloud.parent.remove(
@@ -2458,6 +2521,9 @@ function unloadPointCloud(
 
 function clearAllPointClouds() {
 
+    stopSwissImageProcessing();
+
+
     clearSection();
 
 
@@ -2465,15 +2531,15 @@ function clearAllPointClouds() {
         const [
             url,
             pointcloud
-        ] of loadedPointClouds.entries()
+        ] of loadedPointClouds
     ) {
 
         try {
 
             if (
-                pointcloud.parent &&
+                pointcloud?.parent &&
                 typeof pointcloud.parent.remove ===
-                    "function"
+                "function"
             ) {
 
                 pointcloud.parent.remove(
@@ -2496,7 +2562,19 @@ function clearAllPointClouds() {
     currentPointCloud =
         null;
 
+
     currentTile =
+        null;
+
+
+    SWISSIMAGE_RGB.raster =
+        null;
+
+
+    SWISSIMAGE_RGB.cache.clear();
+
+
+    selectedTileKey =
         null;
 
 
@@ -2540,22 +2618,50 @@ function clearAllPointClouds() {
    POINT CLOUD BOUNDS
    ============================================================ */
 
-   function getPointCloudBounds() {
-       if (!currentPointCloud || !currentPointCloud.boundingBox) {
-           return null;
-       }
+function getPointCloudBounds() {
 
-       const box = currentPointCloud.boundingBox;
-       const min = box.min.clone();
-       const max = box.max.clone();
+    if (
+        !currentPointCloud ||
+        !currentPointCloud.boundingBox
+    ) {
 
-       return {
-           min,
-           max,
-           size: max.clone().sub(min),
-           center: min.clone().add(max).multiplyScalar(0.5)
-       };
-   }
+        return null;
+    }
+
+
+    const box =
+        currentPointCloud.boundingBox;
+
+
+    const min =
+        box.min.clone();
+
+
+    const max =
+        box.max.clone();
+
+
+    return {
+
+        min,
+
+        max,
+
+        size:
+            max
+                .clone()
+                .sub(min),
+
+        center:
+            min
+                .clone()
+                .add(max)
+                .multiplyScalar(
+                    0.5
+                )
+    };
+}
+
 
 /* ============================================================
    SECTION CREATION
@@ -2597,13 +2703,15 @@ function createSection(
 
 
     volume.name =
-        type === "horizontal"
+        type ===
+        "horizontal"
             ? "Horizontal section"
             : "Vertical section";
 
 
     volume.clip =
         true;
+
 
     volume.visible =
         true;
@@ -2625,10 +2733,12 @@ function createSection(
 
 
     if (
-        type === "horizontal"
+        type ===
+        "horizontal"
     ) {
 
         volume.scale.set(
+
             Math.max(
                 size.x,
                 minimumThickness
@@ -2645,16 +2755,10 @@ function createSection(
             )
         );
 
-
-        volume.position.set(
-            bounds.center.x,
-            bounds.center.y,
-            bounds.center.z
-        );
-
     } else {
 
         volume.scale.set(
+
             Math.max(
                 size.x * 0.02,
                 minimumThickness
@@ -2670,14 +2774,14 @@ function createSection(
                 minimumThickness
             )
         );
-
-
-        volume.position.set(
-            bounds.center.x,
-            bounds.center.y,
-            bounds.center.z
-        );
     }
+
+
+    volume.position.set(
+        bounds.center.x,
+        bounds.center.y,
+        bounds.center.z
+    );
 
 
     viewer.scene.addVolume(
@@ -2701,8 +2805,11 @@ function createSection(
 
 
     currentSection = {
+
         type,
+
         volume,
+
         bounds
     };
 
@@ -2777,8 +2884,7 @@ function createSectionControls() {
             <div class="section-type">
                 Horizontal section
             </div>
-</br>
-</br>
+
             <label>
                 Height
                 <span id="section-position-value">
@@ -2797,8 +2903,7 @@ function createSectionControls() {
                 )}"
                 value="${value}"
             >
-</br>
-</br>
+
             <label>
                 Thickness
                 <span id="section-thickness-value">
@@ -2901,34 +3006,20 @@ function createSectionControls() {
     );
 
 
-    const positionSlider =
-        getEl(
-            "section-position"
-        );
+    getEl(
+        "section-position"
+    )?.addEventListener(
+        "input",
+        updateSectionFromControls
+    );
 
 
-    const thicknessSlider =
-        getEl(
-            "section-thickness"
-        );
-
-
-    if (positionSlider) {
-
-        positionSlider.addEventListener(
-            "input",
-            updateSectionFromControls
-        );
-    }
-
-
-    if (thicknessSlider) {
-
-        thicknessSlider.addEventListener(
-            "input",
-            updateSectionFromControls
-        );
-    }
+    getEl(
+        "section-thickness"
+    )?.addEventListener(
+        "input",
+        updateSectionFromControls
+    );
 }
 
 
@@ -3070,8 +3161,7 @@ function clearSection() {
 
 
     if (
-        currentSection &&
-        currentSection.volume
+        currentSection?.volume
     ) {
 
         const volume =
@@ -3082,36 +3172,31 @@ function clearSection() {
 
             if (
                 typeof viewer.scene.removeVolume ===
-                    "function"
+                "function"
             ) {
 
                 viewer.scene.removeVolume(
                     volume
                 );
 
-            } else {
+            } else if (
+                viewer.scene.volumes
+            ) {
 
-                if (
+                const index =
                     viewer.scene.volumes
-                ) {
-
-                    const index =
-                        viewer.scene
-                            .volumes
-                            .indexOf(
-                                volume
-                            );
+                        .indexOf(
+                            volume
+                        );
 
 
-                    if (index !== -1) {
+                if (index !== -1) {
 
-                        viewer.scene
-                            .volumes
-                            .splice(
-                                index,
-                                1
-                            );
-                    }
+                    viewer.scene.volumes
+                        .splice(
+                            index,
+                            1
+                        );
                 }
 
 
@@ -3152,7 +3237,9 @@ function clearSection() {
 
 
     const sectionInfo =
-        getEl("section-info");
+        getEl(
+            "section-info"
+        );
 
 
     if (sectionInfo) {
@@ -3170,24 +3257,6 @@ function clearSection() {
    SWISSIMAGE RGB
    ============================================================ */
 
-/*
- * SWISSIMAGE is served as WebMercator XYZ imagery.
- *
- * We:
- *
- * 1. Take the selected LiDAR tile bbox.
- * 2. Transform LV95 -> WebMercator.
- * 3. Download the required SWISSIMAGE tiles.
- * 4. Stitch them into an offscreen canvas.
- * 5. Transform every loaded LiDAR point XY to WebMercator.
- * 6. Sample the orthophoto.
- * 7. Write RGB into the point's color BufferAttribute.
- *
- * This is CPU based, so it is deliberately restricted
- * to the currently loaded/visible Potree nodes.
- */
-
-
 function startSwissImageProcessing() {
 
     if (
@@ -3199,9 +3268,6 @@ function startSwissImageProcessing() {
     }
 
 
-    /*
-     * Do not start multiple timers.
-     */
     if (
         SWISSIMAGE_RGB.processTimer
     ) {
@@ -3214,54 +3280,117 @@ function startSwissImageProcessing() {
 
 
     SWISSIMAGE_RGB.processTimer =
-       window.setInterval(
-           processSwissImageRGB,
-           1500
+        window.setInterval(
+            processSwissImageRGB,
+            1500
         );
 }
 
+
+/* ============================================================
+   SWISSIMAGE PROCESSING
+   ============================================================ */
+
 async function processSwissImageRGB() {
-    const selector = getEl("color-mode");
+
+    const selector =
+        getEl(
+            "color-mode"
+        );
+
 
     if (
         swissImageProcessRunning ||
         !currentPointCloud ||
         !currentTile ||
-        (selector && selector.value !== "swissimage")
+        (
+            selector &&
+            selector.value !==
+            "swissimage"
+        )
     ) {
+
         return;
     }
 
-    swissImageProcessRunning = true;
-    showSwissImageProgress(0, 1, "Preparing SWISSIMAGE…");
 
-    // Let the browser paint the progress UI before doing work.
-    await new Promise(resolve =>
-        requestAnimationFrame(() =>
-            requestAnimationFrame(resolve)
-        )
+    swissImageProcessRunning =
+        true;
+
+
+    showSwissImageProgress(
+        0,
+        1,
+        "Preparing SWISSIMAGE…"
     );
 
+
+    await new Promise(
+        resolve =>
+            requestAnimationFrame(
+                () =>
+                    requestAnimationFrame(
+                        resolve
+                    )
+            )
+    );
+
+
     try {
+
+        const currentKey =
+            tileKey(
+                currentTile,
+                0
+            );
+
+
         if (
             !SWISSIMAGE_RGB.raster ||
-            SWISSIMAGE_RGB.raster.tileKey !== tileKey(currentTile, 0)
+            SWISSIMAGE_RGB.raster.tileKey !==
+            currentKey
         ) {
+
             await prepareSwissImageRaster();
         }
 
-        await colorVisiblePointNodes((done, total) => {
-            showSwissImageProgress(done, total);
-        });
+
+        await colorVisiblePointNodes(
+            (done, total) => {
+
+                showSwissImageProgress(
+                    done,
+                    total
+                );
+            }
+        );
+
+
+        setStatus(
+            "SWISSIMAGE RGB applied."
+        );
+
     } catch (error) {
-        console.error("SWISSIMAGE RGB failed:", error);
-        const message = error?.message ?? String(error);
-        setStatus(`SWISSIMAGE RGB failed: ${message}`);
+
+        console.error(
+            "SWISSIMAGE RGB failed:",
+            error
+        );
+
+
+        setStatus(
+            `SWISSIMAGE RGB failed: ${error.message}`
+        );
+
     } finally {
+
         hideSwissImageProgress();
-        swissImageProcessRunning = false;
+
+        swissImageProcessRunning =
+            false;
     }
 }
+
 
 /* ============================================================
    PREPARE SWISSIMAGE RASTER
@@ -3272,6 +3401,23 @@ async function prepareSwissImageRaster() {
     if (
         SWISSIMAGE_RGB.loading
     ) {
+
+        /*
+         * Wait for another preparation operation.
+         */
+        while (
+            SWISSIMAGE_RGB.loading
+        ) {
+
+            await new Promise(
+                resolve =>
+                    setTimeout(
+                        resolve,
+                        25
+                    )
+            );
+        }
+
 
         return;
     }
@@ -3289,11 +3435,11 @@ async function prepareSwissImageRaster() {
 
     if (
         typeof proj4 !==
-            "function"
+        "function"
     ) {
 
         throw new Error(
-            "proj4 is not available. Make sure proj4.js is loaded."
+            "proj4 is not available."
         );
     }
 
@@ -3314,8 +3460,7 @@ async function prepareSwissImageRaster() {
 
 
         /*
-         * Convert tile corners from WGS84
-         * into LV95.
+         * WGS84 -> LV95.
          */
         const sw =
             proj4(
@@ -3340,7 +3485,7 @@ async function prepareSwissImageRaster() {
 
 
         /*
-         * Then LV95 -> WebMercator.
+         * LV95 -> WebMercator.
          */
         const sw3857 =
             proj4(
@@ -3358,42 +3503,118 @@ async function prepareSwissImageRaster() {
             );
 
 
-        const MAX_RASTER_PIXELS = 8 * 1024 * 1024; // 32 MB for RGBA canvas pixels
-const MAX_RASTER_TILES = 64;
+        const MAX_RASTER_PIXELS =
+            8 * 1024 * 1024;
 
-let z = SWISSIMAGE_RGB.zoom;
-let minX, maxX, minY, maxY, tilesWide, tilesHigh;
 
-while (true) {
-    const minTile = mercatorToTile(sw3857[0], ne3857[1], z);
-    const maxTile = mercatorToTile(ne3857[0], sw3857[1], z);
+        const MAX_RASTER_TILES =
+            64;
 
-    minX = Math.min(minTile.x, maxTile.x);
-    maxX = Math.max(minTile.x, maxTile.x);
-    minY = Math.min(minTile.y, maxTile.y);
-    maxY = Math.max(minTile.y, maxTile.y);
 
-    tilesWide = maxX - minX + 1;
-    tilesHigh = maxY - minY + 1;
+        let z =
+            SWISSIMAGE_RGB.zoom;
 
-    const tileCount = tilesWide * tilesHigh;
-    const pixelCount =
-        tilesWide * SWISSIMAGE_RGB.tileSize *
-        tilesHigh * SWISSIMAGE_RGB.tileSize;
 
-    if (
-        tileCount <= MAX_RASTER_TILES &&
-        pixelCount <= MAX_RASTER_PIXELS
-    ) {
-        break;
-    }
+        let minX;
+        let maxX;
+        let minY;
+        let maxY;
 
-    if (z <= 0) {
-        throw new Error("SWISSIMAGE raster exceeds the safe size limit.");
-    }
+        let tilesWide;
+        let tilesHigh;
 
-    z--;
-}
+
+        while (true) {
+
+            const minTile =
+                mercatorToTile(
+                    sw3857[0],
+                    ne3857[1],
+                    z
+                );
+
+
+            const maxTile =
+                mercatorToTile(
+                    ne3857[0],
+                    sw3857[1],
+                    z
+                );
+
+
+            minX =
+                Math.min(
+                    minTile.x,
+                    maxTile.x
+                );
+
+
+            maxX =
+                Math.max(
+                    minTile.x,
+                    maxTile.x
+                );
+
+
+            minY =
+                Math.min(
+                    minTile.y,
+                    maxTile.y
+                );
+
+
+            maxY =
+                Math.max(
+                    minTile.y,
+                    maxTile.y
+                );
+
+
+            tilesWide =
+                maxX -
+                minX +
+                1;
+
+
+            tilesHigh =
+                maxY -
+                minY +
+                1;
+
+
+            const tileCount =
+                tilesWide *
+                tilesHigh;
+
+
+            const pixelCount =
+                tilesWide *
+                SWISSIMAGE_RGB.tileSize *
+                tilesHigh *
+                SWISSIMAGE_RGB.tileSize;
+
+
+            if (
+                tileCount <=
+                MAX_RASTER_TILES &&
+                pixelCount <=
+                MAX_RASTER_PIXELS
+            ) {
+
+                break;
+            }
+
+
+            if (z <= 0) {
+
+                throw new Error(
+                    "SWISSIMAGE raster exceeds the safe size limit."
+                );
+            }
+
+
+            z--;
+        }
 
 
         const canvas =
@@ -3431,11 +3652,12 @@ while (true) {
 
 
         setStatus(
-            "Loading SWISSIMAGE RGB…"
+            `Loading SWISSIMAGE RGB at zoom ${z}…`
         );
 
 
-        const requests = [];
+        const requests =
+            [];
 
 
         for (
@@ -3451,6 +3673,7 @@ while (true) {
             ) {
 
                 requests.push(
+
                     loadSwissImageTile(
                         z,
                         x,
@@ -3459,12 +3682,18 @@ while (true) {
                         image => {
 
                             const px =
-                                (x - minX) *
+                                (
+                                    x -
+                                    minX
+                                ) *
                                 SWISSIMAGE_RGB.tileSize;
 
 
                             const py =
-                                (y - minY) *
+                                (
+                                    y -
+                                    minY
+                                ) *
                                 SWISSIMAGE_RGB.tileSize;
 
 
@@ -3484,12 +3713,10 @@ while (true) {
             requests
         );
 
-        SWISSIMAGE_RGB.cache.clear();
-
 
         /*
-         * World coordinate of the raster canvas
-         * upper-left corner.
+         * Upper-left and lower-right
+         * world coordinates.
          */
         const topLeft =
             tileToMercator(
@@ -3505,6 +3732,9 @@ while (true) {
                 maxY + 1,
                 z
             );
+
+
+        SWISSIMAGE_RGB.cache.clear();
 
 
         SWISSIMAGE_RGB.raster = {
@@ -3549,8 +3779,16 @@ while (true) {
         };
 
 
+        /*
+         * Create a fresh block cache for this raster.
+         */
+        swissImageBlockCaches.delete(
+            SWISSIMAGE_RGB.raster
+        );
+
+
         setStatus(
-            "SWISSIMAGE RGB ready."
+            "SWISSIMAGE RGB raster ready."
         );
 
     } finally {
@@ -3589,7 +3827,10 @@ function loadSwissImageTile(
 
     const promise =
         new Promise(
-            (resolve, reject) => {
+            (
+                resolve,
+                reject
+            ) => {
 
                 const image =
                     new Image();
@@ -3600,17 +3841,19 @@ function loadSwissImageTile(
 
 
                 image.onload =
-                    () => resolve(
-                        image
-                    );
+                    () =>
+                        resolve(
+                            image
+                        );
 
 
                 image.onerror =
-                    () => reject(
-                        new Error(
-                            `SWISSIMAGE tile failed: ${key}`
-                        )
-                    );
+                    () =>
+                        reject(
+                            new Error(
+                                `SWISSIMAGE tile failed: ${key}`
+                            )
+                        );
 
 
                 image.src =
@@ -3653,32 +3896,29 @@ function mercatorToTile(
         );
 
 
-    const tx =
-        (
-            x + world
-        ) /
-        (
-            2 * world
-        ) *
-        n;
-
-
-    const ty =
-        (
-            world - y
-        ) /
-        (
-            2 * world
-        ) *
-        n;
-
-
     return {
+
         x:
-            Math.floor(tx),
+            Math.floor(
+                (
+                    x + world
+                ) /
+                (
+                    2 * world
+                ) *
+                n
+            ),
 
         y:
-            Math.floor(ty)
+            Math.floor(
+                (
+                    world - y
+                ) /
+                (
+                    2 * world
+                ) *
+                n
+            )
     };
 }
 
@@ -3720,299 +3960,1005 @@ function tileToMercator(
 
 
 /* ============================================================
+   GET RASTER PIXEL
+   ============================================================ */
+
+function getSwissImagePixel(
+    raster,
+    x,
+    y
+) {
+
+    let cache =
+        swissImageBlockCaches.get(
+            raster
+        );
+
+
+    if (!cache) {
+
+        cache =
+            new Map();
+
+        swissImageBlockCaches.set(
+            raster,
+            cache
+        );
+    }
+
+
+    const blockX =
+        Math.floor(
+            x /
+            SWISSIMAGE_BLOCK_SIZE
+        );
+
+
+    const blockY =
+        Math.floor(
+            y /
+            SWISSIMAGE_BLOCK_SIZE
+        );
+
+
+    const key =
+        `${blockX},${blockY}`;
+
+
+    let block =
+        cache.get(
+            key
+        );
+
+
+    if (block) {
+
+        /*
+         * LRU refresh.
+         */
+        cache.delete(
+            key
+        );
+
+        cache.set(
+            key,
+            block
+        );
+
+    } else {
+
+        const x0 =
+            blockX *
+            SWISSIMAGE_BLOCK_SIZE;
+
+
+        const y0 =
+            blockY *
+            SWISSIMAGE_BLOCK_SIZE;
+
+
+        const width =
+            Math.min(
+                SWISSIMAGE_BLOCK_SIZE,
+                raster.width -
+                x0
+            );
+
+
+        const height =
+            Math.min(
+                SWISSIMAGE_BLOCK_SIZE,
+                raster.height -
+                y0
+            );
+
+
+        if (
+            width <= 0 ||
+            height <= 0
+        ) {
+
+            return [
+                128,
+                128,
+                128
+            ];
+        }
+
+
+        const imageData =
+            raster.context.getImageData(
+                x0,
+                y0,
+                width,
+                height
+            );
+
+
+        block = {
+
+            x0,
+
+            y0,
+
+            width,
+
+            height,
+
+            data:
+                imageData.data
+        };
+
+
+        cache.set(
+            key,
+            block
+        );
+
+
+        if (
+            cache.size >
+            SWISSIMAGE_MAX_CACHED_BLOCKS
+        ) {
+
+            cache.delete(
+                cache.keys()
+                    .next()
+                    .value
+            );
+        }
+    }
+
+
+    const localX =
+        x -
+        block.x0;
+
+
+    const localY =
+        y -
+        block.y0;
+
+
+    if (
+        localX < 0 ||
+        localY < 0 ||
+        localX >= block.width ||
+        localY >= block.height
+    ) {
+
+        return [
+            128,
+            128,
+            128
+        ];
+    }
+
+
+    const offset =
+        (
+            (
+                localY *
+                block.width
+            ) +
+            localX
+        ) *
+        4;
+
+
+    return block.data.subarray(
+        offset,
+        offset + 3
+    );
+}
+
+
+/* ============================================================
+   PROGRESS UI
+   ============================================================ */
+
+function showSwissImageProgress(
+    done,
+    total,
+    message =
+        "Coloring SWISSIMAGE…"
+) {
+
+    let box =
+        getEl(
+            "swissimage-progress"
+        );
+
+
+    if (!box) {
+
+        box =
+            document.createElement(
+                "div"
+            );
+
+
+        box.id =
+            "swissimage-progress";
+
+
+        box.style.cssText = `
+            position:fixed;
+            right:20px;
+            bottom:20px;
+            z-index:10000;
+            width:270px;
+            padding:12px 16px;
+            border-radius:8px;
+            color:white;
+            background:rgba(25,25,25,.93);
+            font:14px sans-serif;
+            box-shadow:0 2px 12px #0006;
+        `;
+
+
+        box.innerHTML = `
+            <div style="
+                display:flex;
+                align-items:center;
+                gap:10px
+            ">
+                <span style="
+                    width:18px;
+                    height:18px;
+                    flex:none;
+                    border:3px solid #888;
+                    border-top-color:white;
+                    border-radius:50%;
+                    animation:swissimage-spin .8s linear infinite
+                "></span>
+
+                <span data-message></span>
+            </div>
+
+            <div style="
+                margin-top:9px;
+                height:5px;
+                background:#555;
+                border-radius:4px
+            ">
+                <div data-bar style="
+                    height:100%;
+                    width:0;
+                    background:#49a5ff;
+                    border-radius:4px
+                "></div>
+            </div>
+        `;
+
+
+        if (
+            !getEl(
+                "swissimage-progress-style"
+            )
+        ) {
+
+            const style =
+                document.createElement(
+                    "style"
+                );
+
+
+            style.id =
+                "swissimage-progress-style";
+
+
+            style.textContent =
+                "@keyframes swissimage-spin " +
+                "{ to { transform: rotate(360deg) } }";
+
+
+            document.head.appendChild(
+                style
+            );
+        }
+
+
+        document.body.appendChild(
+            box
+        );
+    }
+
+
+    const percent =
+        total
+            ? Math.min(
+                100,
+                Math.round(
+                    done *
+                    100 /
+                    total
+                )
+            )
+            : 0;
+
+
+    box.querySelector(
+        "[data-message]"
+    ).textContent =
+        `${message} ${percent}%`;
+
+
+    box.querySelector(
+        "[data-bar]"
+    ).style.width =
+        `${percent}%`;
+}
+
+
+function hideSwissImageProgress() {
+
+    getEl(
+        "swissimage-progress"
+    )?.remove();
+}
+
+
+function yieldToBrowser() {
+
+    return new Promise(
+        resolve =>
+            setTimeout(
+                resolve,
+                0
+            )
+    );
+}
+
+
+/* ============================================================
+   CREATE / GET PER-POINT RGB ATTRIBUTE
+   ============================================================ */
+
+/*
+ * IMPORTANT:
+ *
+ * We intentionally DO NOT use an existing "rgba"
+ * attribute.
+ *
+ * SWISSIMAGE is an external raster. We create our
+ * own RGB attribute with exactly:
+ *
+ *     3 bytes × number of LiDAR points
+ *
+ * This is independent of the raster pixel count.
+ */
+
+function ensureSwissImageColorAttribute(
+    geometry,
+    count
+) {
+
+    if (
+        !geometry ||
+        !count ||
+        typeof THREE ===
+        "undefined"
+    ) {
+
+        return null;
+    }
+
+
+    let color =
+        geometry.attributes.color;
+
+
+    /*
+     * If an old color attribute exists but has
+     * the wrong format, replace it.
+     */
+    if (
+        color &&
+        color.count === count &&
+        color.itemSize === 3 &&
+        color.array instanceof Uint8Array &&
+        color.normalized === true
+    ) {
+
+        return color;
+    }
+
+
+    /*
+     * Always create our own RGB attribute.
+     */
+    const array =
+        new Uint8Array(
+            count * 3
+        );
+
+
+    /*
+     * Default to neutral grey until every point
+     * receives a SWISSIMAGE value.
+     */
+    array.fill(
+        128
+    );
+
+
+    color =
+        new THREE.BufferAttribute(
+            array,
+            3,
+            true
+        );
+
+
+    geometry.setAttribute(
+        "color",
+        color
+    );
+
+
+    color.needsUpdate =
+        true;
+
+
+    return color;
+}
+
+
+/* ============================================================
+   COLOR ONE POTREE GEOMETRY
+   ============================================================ */
+
+async function colorGeometryFromSwissImage(
+    sceneNode,
+    rasterKey,
+    onProgress =
+        () => {}
+) {
+
+    const geometry =
+        sceneNode?.geometry;
+
+
+    const position =
+        geometry?.attributes?.position;
+
+
+    const raster =
+        SWISSIMAGE_RGB.raster;
+
+
+    if (
+        !geometry ||
+        !position ||
+        !raster?.context
+    ) {
+
+        return false;
+    }
+
+
+    geometry.userData ??=
+        {};
+
+
+    if (
+        geometry.userData
+            .swissImageColoredFor ===
+        rasterKey
+    ) {
+
+        return false;
+    }
+
+
+    const count =
+        position.count;
+
+
+    if (!count) {
+
+        return false;
+    }
+
+
+    /*
+     * ---------------------------------------------------------
+     * THIS IS THE IMPORTANT FIX.
+     *
+     * Do NOT look for geometry.attributes.rgba.
+     * Do NOT compare raster pixels with point count.
+     *
+     * Create:
+     *
+     *     count × 3 Uint8 RGB values
+     *
+     * one RGB triplet for every LiDAR point.
+     * ---------------------------------------------------------
+     */
+
+    const color =
+        ensureSwissImageColorAttribute(
+            geometry,
+            count
+        );
+
+
+    if (!color) {
+
+        console.warn(
+            "Could not create Potree color attribute."
+        );
+
+        return false;
+    }
+
+
+    /*
+     * Position buffer.
+     */
+    const positions =
+        position.array;
+
+
+    const positionItemSize =
+        position.itemSize || 3;
+
+
+    /*
+     * RGB buffer.
+     */
+    const colors =
+        color.array;
+
+
+    /*
+     * Matrix that converts node-local
+     * coordinates into the scene/world
+     * coordinate system.
+     */
+    sceneNode.updateMatrixWorld?.(
+        true
+    );
+
+
+    const matrixWorld =
+        sceneNode.matrixWorld;
+
+
+    if (!matrixWorld) {
+
+        console.warn(
+            "Potree scene node has no matrixWorld."
+        );
+
+        return false;
+    }
+
+
+    const e =
+        matrixWorld.elements;
+
+
+    /*
+     * Raster coordinate scale.
+     *
+     * These were previously undefined.
+     */
+    const worldWidth =
+        raster.worldMaxX -
+        raster.worldMinX;
+
+
+    const worldHeight =
+        raster.worldMaxY -
+        raster.worldMinY;
+
+
+    if (
+        !Number.isFinite(
+            worldWidth
+        ) ||
+        !Number.isFinite(
+            worldHeight
+        ) ||
+        worldWidth <= 0 ||
+        worldHeight <= 0
+    ) {
+
+        console.warn(
+            "Invalid SWISSIMAGE raster dimensions."
+        );
+
+        return false;
+    }
+
+
+    const scaleX =
+        raster.width /
+        worldWidth;
+
+
+    const scaleY =
+        raster.height /
+        worldHeight;
+
+
+    const lv95 =
+        [
+            0,
+            0
+        ];
+
+
+    /*
+     * Process in batches so the browser remains
+     * responsive.
+     */
+    for (
+        let start = 0;
+        start < count;
+        start += SWISSIMAGE_BATCH_SIZE
+    ) {
+
+        const end =
+            Math.min(
+                start +
+                SWISSIMAGE_BATCH_SIZE,
+                count
+            );
+
+
+        for (
+            let i = start;
+            i < end;
+            i++
+        ) {
+
+            /*
+             * Position buffer index.
+             */
+            const j =
+                i *
+                positionItemSize;
+
+
+            const x =
+                positions[j];
+
+
+            const y =
+                positions[j + 1];
+
+
+            const z =
+                positionItemSize >= 3
+                    ? positions[j + 2]
+                    : 0;
+
+
+            /*
+             * -------------------------------------------------
+             * Transform node-local position into world/LV95.
+             * -------------------------------------------------
+             *
+             * matrixWorld is used instead of the undefined
+             * "e" variable from the previous version.
+             */
+            const worldX =
+                e[0] * x +
+                e[4] * y +
+                e[8] * z +
+                e[12];
+
+
+            const worldY =
+                e[1] * x +
+                e[5] * y +
+                e[9] * z +
+                e[13];
+
+
+            lv95[0] =
+                worldX;
+
+
+            lv95[1] =
+                worldY;
+
+
+            /*
+             * LV95 -> WebMercator.
+             */
+            const mercator =
+                proj4(
+                    "EPSG:2056",
+                    "EPSG:3857",
+                    lv95
+                );
+
+
+            /*
+             * WebMercator -> raster pixel.
+             *
+             * Raster Y increases downward, therefore:
+             *
+             *     worldMaxY - mercatorY
+             */
+            const ix =
+                Math.floor(
+                    (
+                        mercator[0] -
+                        raster.worldMinX
+                    ) *
+                    scaleX
+                );
+
+
+            const iy =
+                Math.floor(
+                    (
+                        raster.worldMaxY -
+                        mercator[1]
+                    ) *
+                    scaleY
+                );
+
+
+            const c =
+                i * 3;
+
+
+            /*
+             * Point outside the raster.
+             */
+            if (
+                ix < 0 ||
+                iy < 0 ||
+                ix >= raster.width ||
+                iy >= raster.height
+            ) {
+
+                colors[c] =
+                    128;
+
+                colors[c + 1] =
+                    128;
+
+                colors[c + 2] =
+                    128;
+
+                continue;
+            }
+
+
+            /*
+             * Sample SWISSIMAGE.
+             */
+            const rgb =
+                getSwissImagePixel(
+                    raster,
+                    ix,
+                    iy
+                );
+
+
+            /*
+             * Write one RGB triplet for this
+             * one LiDAR point.
+             */
+            colors[c] =
+                rgb[0];
+
+
+            colors[c + 1] =
+                rgb[1];
+
+
+            colors[c + 2] =
+                rgb[2];
+        }
+
+
+        /*
+         * Update progress.
+         */
+        onProgress(
+            end
+        );
+
+
+        /*
+         * Allow browser rendering.
+         */
+        await yieldToBrowser();
+    }
+
+
+    /*
+     * Tell Three.js that the GPU-side color
+     * buffer has changed.
+     */
+    color.needsUpdate =
+        true;
+
+
+    /*
+     * Also tell Three.js/Potree that this geometry
+     * now has a color attribute.
+     */
+    geometry.attributes.color =
+        color;
+
+
+    geometry.userData
+        .swissImageColoredFor =
+        rasterKey;
+
+
+    return true;
+}
+
+
+/* ============================================================
    COLOR VISIBLE POTREE NODES
    ============================================================ */
 
-   // Keep only a bounded set of small canvas pixel blocks in memory.
-   const swissImageBlockCaches = new WeakMap();
-   const SWISSIMAGE_BLOCK_SIZE = 256;
-   const SWISSIMAGE_MAX_CACHED_BLOCKS = 64; // About 16 MB of RGBA pixel data.
-   const SWISSIMAGE_BATCH_SIZE = 10_000;
+async function colorVisiblePointNodes(
+    onProgress =
+        () => {}
+) {
 
-   function getSwissImagePixel(raster, x, y) {
-       let cache = swissImageBlockCaches.get(raster);
+    if (
+        swissImageColoring ||
+        !currentPointCloud ||
+        !SWISSIMAGE_RGB.raster
+    ) {
 
-       if (!cache) {
-           cache = new Map();
-           swissImageBlockCaches.set(raster, cache);
-       }
+        return;
+    }
 
-       const blockX = Math.floor(x / SWISSIMAGE_BLOCK_SIZE);
-       const blockY = Math.floor(y / SWISSIMAGE_BLOCK_SIZE);
-       const key = `${blockX},${blockY}`;
 
-       let block = cache.get(key);
+    const nodes =
+        currentPointCloud.visibleNodes;
 
-       if (block) {
-           // Refresh its position in the LRU cache.
-           cache.delete(key);
-           cache.set(key, block);
-       } else {
-           const x0 = blockX * SWISSIMAGE_BLOCK_SIZE;
-           const y0 = blockY * SWISSIMAGE_BLOCK_SIZE;
-           const width = Math.min(SWISSIMAGE_BLOCK_SIZE, raster.width - x0);
-           const height = Math.min(SWISSIMAGE_BLOCK_SIZE, raster.height - y0);
 
-           block = {
-               x0,
-               y0,
-               width,
-               data: raster.context.getImageData(x0, y0, width, height).data
-           };
+    if (
+        !Array.isArray(nodes)
+    ) {
 
-           cache.set(key, block);
+        return;
+    }
 
-           if (cache.size > SWISSIMAGE_MAX_CACHED_BLOCKS) {
-               cache.delete(cache.keys().next().value);
-           }
-       }
 
-       const offset = (
-           ((y - block.y0) * block.width) +
-           (x - block.x0)
-       ) * 4;
+    const rasterKey =
+        SWISSIMAGE_RGB.raster.tileKey ||
+        "current-raster";
 
-       return block.data.subarray(offset, offset + 3);
-   }
 
-   function showSwissImageProgress(done, total, message = "Coloring SWISSIMAGE…") {
-       let box = document.getElementById("swissimage-progress");
+    const pending =
+        [];
 
-       if (!box) {
-           box = document.createElement("div");
-           box.id = "swissimage-progress";
-           box.style.cssText = `
-               position:fixed; right:20px; bottom:20px; z-index:10000;
-               width:270px; padding:12px 16px; border-radius:8px;
-               color:white; background:rgba(25,25,25,.93);
-               font:14px sans-serif; box-shadow:0 2px 12px #0006;
-           `;
-           box.innerHTML = `
-               <div style="display:flex;align-items:center;gap:10px">
-                   <span style="
-                       width:18px;height:18px;flex:none;
-                       border:3px solid #888;border-top-color:white;
-                       border-radius:50%;animation:swissimage-spin .8s linear infinite
-                   "></span>
-                   <span data-message></span>
-               </div>
-               <div style="margin-top:9px;height:5px;background:#555;border-radius:4px">
-                   <div data-bar style="
-                       height:100%;width:0;background:#49a5ff;border-radius:4px
-                   "></div>
-               </div>
-           `;
 
-           if (!document.getElementById("swissimage-progress-style")) {
-               const style = document.createElement("style");
-               style.id = "swissimage-progress-style";
-               style.textContent =
-                   "@keyframes swissimage-spin { to { transform: rotate(360deg) } }";
-               document.head.appendChild(style);
-           }
+    for (
+        const node of nodes
+    ) {
 
-           document.body.appendChild(box);
-       }
+        const sceneNode =
+            node?.sceneNode;
 
-       const percent = total
-           ? Math.min(100, Math.round(done * 100 / total))
-           : 0;
 
-       box.querySelector("[data-message]").textContent =
-           `${message} ${percent}%`;
-       box.querySelector("[data-bar]").style.width = `${percent}%`;
-   }
+        const geometry =
+            sceneNode?.geometry;
 
-   function hideSwissImageProgress() {
-       document.getElementById("swissimage-progress")?.remove();
-   }
 
-   function yieldToBrowser() {
-       return new Promise(resolve => setTimeout(resolve, 0));
-   }
+        const position =
+            geometry?.attributes?.position;
 
-   async function colorGeometryFromSwissImage(sceneNode, rasterKey, onProgress) {
-       const geometry = sceneNode?.geometry;
-       const position = geometry?.attributes?.position;
-       const a = geometry?.attributes?.rgba;
 
-console.log("Geometry attribute check:", {
-    positionCount: position?.count,
-    rgbaCount: a?.count,
-    rgbaArrayLength: a?.array?.length,
-    rgbaItemSize: a?.itemSize,
-    rgbaNormalized: a?.normalized,
-    rgbaArrayType: a?.array?.constructor?.name,
-  rgbaBytesPerElement: a?.array?.BYTES_PER_ELEMENT,
-  rgbaByteLength: a?.array?.byteLength,
-  rgbaStride: a?.data?.stride,
-    rgbaBytesPerPosition:
-        position?.count ? a?.array?.length / position.count : null,
-});
-       const raster = SWISSIMAGE_RGB.raster;
+        if (
+            sceneNode &&
+            geometry &&
+            position &&
+            position.count > 0 &&
+            geometry.userData
+                ?.swissImageColoredFor !==
+            rasterKey
+        ) {
 
-       if (!position || !raster?.context) return false;
+            pending.push({
 
-       geometry.userData ??= {};
+                sceneNode,
 
-       if (geometry.userData.swissImageColoredFor === rasterKey) {
-           return false;
-       }
+                count:
+                    position.count
+            });
+        }
+    }
 
-       const count = position.count;
-       if (!count) return false;
 
-       /*
-        * Use normalized Uint8 RGB: 3 bytes per point instead of 12 bytes
-        * for Float32 RGB. Potree/Three.js converts normalized values to 0..1.
-        */
-        const color = geometry.attributes.color;
+    const total =
+        pending.reduce(
+            (
+                sum,
+                item
+            ) =>
+                sum +
+                item.count,
+            0
+        );
 
-  if (
-      !color ||
-      color.count !== count ||
-      (color.itemSize !== 3 && color.itemSize !== 4)
-  ) {
-      console.warn(
-          "SWISSIMAGE RGB skipped: no compatible existing color attribute.",
-          geometry.attributes
-      );
-      return false;
-  }
 
-  const colors = color.array;
-  const colorItemSize = color.itemSize;
-  const isFloat = colors instanceof Float32Array;
-  const isNormalizedByte =
-      colors instanceof Uint8Array && color.normalized;
+    if (!total) {
 
-  if (!isFloat && !isNormalizedByte) {
-      console.warn(
-          "SWISSIMAGE RGB skipped: unsupported existing color format.",
-          colors.constructor.name,
-          "normalized:",
-          color.normalized
-      );
-      return false;
-  }
+        onProgress(
+            0,
+            0
+        );
 
-       const scaleX = raster.width / worldWidth;
-       const scaleY = raster.height / worldHeight;
-       const lv95 = [0, 0];
+        return;
+    }
 
-       for (let start = 0; start < count; start += SWISSIMAGE_BATCH_SIZE) {
-           const end = Math.min(start + SWISSIMAGE_BATCH_SIZE, count);
 
-           for (let i = start; i < end; i++) {
-               const j = i * 3;
-               const x = positions[j];
-               const y = positions[j + 1];
-               const z = positions[j + 2];
+    swissImageColoring =
+        true;
 
-               // Transform node-local position to world coordinates.
-               lv95[0] = e[0] * x + e[4] * y + e[8] * z + e[12];
-               lv95[1] = e[1] * x + e[5] * y + e[9] * z + e[13];
 
-               const mercator = proj4("EPSG:2056", "EPSG:3857", lv95);
+    let done =
+        0;
 
-               const ix = Math.floor(
-                   (mercator[0] - raster.worldMinX) * scaleX
-               );
-               const iy = Math.floor(
-                   (raster.worldMaxY - mercator[1]) * scaleY
-               );
 
-               if (ix < 0 || iy < 0 || ix >= raster.width || iy >= raster.height) {
-                   colors[j] = colors[j + 1] = colors[j + 2] = 128;
-                   continue;
-               }
+    try {
 
-               const rgb = getSwissImagePixel(raster, ix, iy);
-               const c = i * colorItemSize;
-const scale = isFloat ? 1 / 255 : 1;
+        for (
+            const item of pending
+        ) {
 
-colors[c]     = rgb[0] * scale;
-colors[c + 1] = rgb[1] * scale;
-colors[c + 2] = rgb[2] * scale;
-           }
+            const sceneNode =
+                item.sceneNode;
 
-           // Tell Three.js the attribute changed, then let the browser render
-           // the progress indicator and respond to other events.
 
-           onProgress(end);
+            sceneNode.updateMatrixWorld?.(
+                true
+            );
 
-           await yieldToBrowser();
-       }
-       color.needsUpdate = true;
-       geometry.userData.swissImageColoredFor = rasterKey;
-       return true;
-   }
 
-   let swissImageColoring = false;
+            await colorGeometryFromSwissImage(
+                sceneNode,
 
-   async function colorVisiblePointNodes(onProgress = () => {}) {
-       if (
-           swissImageColoring ||
-           !currentPointCloud ||
-           !SWISSIMAGE_RGB.raster
-       ) {
-           return;
-       }
+                rasterKey,
 
-       const nodes = currentPointCloud.visibleNodes;
-       if (!Array.isArray(nodes)) return;
+                pointsInNode => {
 
-       const rasterKey =
-           SWISSIMAGE_RGB.raster.tileKey ?? "current-raster";
+                    onProgress(
+                        done +
+                        pointsInNode,
 
-       const pending = [];
+                        total
+                    );
+                }
+            );
 
-       for (const node of nodes) {
-           const sceneNode = node?.sceneNode;
-           const geometry = sceneNode?.geometry;
-           const position = geometry?.attributes?.position;
 
-           if (
-               geometry &&
-               position &&
-               geometry.userData?.swissImageColoredFor !== rasterKey
-           ) {
-               pending.push({ sceneNode, count: position.count });
-           }
-       }
+            done +=
+                item.count;
 
-       const total = pending.reduce((sum, item) => sum + item.count, 0);
 
-       if (!total) {
-           onProgress(0, 0);
-           return;
-       }
+            onProgress(
+                done,
+                total
+            );
 
-       swissImageColoring = true;
-       let done = 0;
 
-       try {
-           for (const item of pending) {
-               const sceneNode = item.sceneNode;
-               sceneNode.updateMatrixWorld?.(true);
+            await yieldToBrowser();
+        }
 
-               await colorGeometryFromSwissImage(
-                   sceneNode,
-                   rasterKey,
-                   pointsInNode => {
-                       onProgress(done + pointsInNode, total);
-                   }
-               );
+    } finally {
 
-               done += item.count;
-               onProgress(done, total);
-
-               await yieldToBrowser();
-           }
-       } finally {
-           swissImageColoring = false;
-       }
-   }
+        swissImageColoring =
+            false;
+    }
+}
 
 
 /* ============================================================
@@ -4022,7 +4968,9 @@ colors[c + 2] = rgb[2] * scale;
 async function searchPlace() {
 
     const input =
-        getEl("search-input");
+        getEl(
+            "search-input"
+        );
 
 
     if (!input) {
@@ -4077,7 +5025,9 @@ async function searchPlace() {
 
 
         const response =
-            await fetch(url);
+            await fetch(
+                url
+            );
 
 
         if (!response.ok) {
@@ -4093,7 +5043,8 @@ async function searchPlace() {
 
 
         const results =
-            data.results || [];
+            data.results ||
+            [];
 
 
         renderSearchResults(
@@ -4128,7 +5079,9 @@ function renderSearchResults(
 ) {
 
     const container =
-        getEl("search-results");
+        getEl(
+            "search-results"
+        );
 
 
     if (!container) {
@@ -4141,7 +5094,8 @@ function renderSearchResults(
 
 
     for (
-        const result of results
+        const result of
+        results
     ) {
 
         const item =
@@ -4159,15 +5113,11 @@ function renderSearchResults(
             {};
 
 
-        const label =
+        item.textContent =
             attrs.label ||
             attrs.detail ||
             result.label ||
             "Location";
-
-
-        item.textContent =
-            label;
 
 
         item.addEventListener(
@@ -4190,8 +5140,12 @@ function renderSearchResults(
 
                 if (
                     map &&
-                    Number.isFinite(lat) &&
-                    Number.isFinite(lon)
+                    Number.isFinite(
+                        lat
+                    ) &&
+                    Number.isFinite(
+                        lon
+                    )
                 ) {
 
                     map.setView(
@@ -4265,24 +5219,31 @@ function downloadCurrentTile() {
 window.swissCOPC = {
 
     viewer:
-        () => viewer,
+        () =>
+            viewer,
 
     currentPointCloud:
-        () => currentPointCloud,
+        () =>
+            currentPointCloud,
 
     currentTile:
-        () => currentTile,
+        () =>
+            currentTile,
 
     section:
-        () => currentSection,
+        () =>
+            currentSection,
 
     loadedPointClouds:
-        () => loadedPointClouds,
+        () =>
+            loadedPointClouds,
 
     colorMode:
         mode => {
 
-            if (currentPointCloud) {
+            if (
+                currentPointCloud
+            ) {
 
                 applyColorMode(
                     currentPointCloud,

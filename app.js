@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_31");
+ setStatus("d_32");
 
 
 
@@ -1657,100 +1657,74 @@ function clearSection() {
    SWISSIMAGE PROCESSING
    ============================================================ */
 
-function startSwissImageProcessing() {
-    if (!currentPointCloud || !currentTile) {
-        return;
-    }
+   function startSwissImageProcessing() {
+       if (!currentPointCloud || !currentTile) {
+           return;
+       }
 
-    if (SWISSIMAGE_RGB.processTimer) {
-        /*
-         * We still immediately process here. This is useful when
-         * the user switches to SWISSIMAGE after Potree has already
-         * loaded new visible nodes.
-         */
-        processSwissImageRGB();
-        return;
-    }
+       if (SWISSIMAGE_RGB.processTimer) {
+           return;
+       }
 
-    processSwissImageRGB();
+       // Color currently visible nodes immediately.
+       void processSwissImageRGB();
 
-    SWISSIMAGE_RGB.processTimer =
-        window.setInterval(
-            processSwissImageRGB,
-            1500
-        );
-}
+       // Keep checking for newly visible Potree LOD nodes.
+       SWISSIMAGE_RGB.processTimer = window.setInterval(
+           () => void processSwissImageRGB(),
+           250
+       );
+   }
 
-async function processSwissImageRGB() {
-    const selector =
-        getEl("color-mode");
+   async function processSwissImageRGB() {
+       const selector = getEl("color-mode");
 
-    if (
-        swissImageProcessRunning ||
-        !currentPointCloud ||
-        !currentTile ||
-        (
-            selector &&
-            selector.value !== "swissimage"
-        )
-    ) {
-        return;
-    }
+       if (
+           swissImageProcessRunning ||
+           !currentPointCloud ||
+           !currentTile ||
+           (selector && selector.value !== "swissimage")
+       ) {
+           return;
+       }
 
-    swissImageProcessRunning = true;
+       swissImageProcessRunning = true;
+       let progressShown = false;
 
-    showSwissImageProgress(
-        0,
-        1,
-        "Preparing SWISSIMAGE…"
-    );
+       try {
+           const currentKey = tileKey(currentTile, 0);
 
-    await new Promise(resolve => {
-        requestAnimationFrame(() => {
-            requestAnimationFrame(resolve);
-        });
-    });
+           if (
+               !SWISSIMAGE_RGB.raster ||
+               SWISSIMAGE_RGB.raster.tileKey !== currentKey
+           ) {
+               setStatus("Preparing SWISSIMAGE…");
+               await prepareSwissImageRaster();
+           }
 
-    try {
-        const currentKey =
-            tileKey(currentTile, 0);
+           const coloredAnyNodes = await colorVisiblePointNodes(
+               (done, total) => {
+                   if (total > 0) {
+                       progressShown = true;
+                       showSwissImageProgress(done, total);
+                   }
+               }
+           );
 
-        if (
-            !SWISSIMAGE_RGB.raster ||
-            SWISSIMAGE_RGB.raster.tileKey !== currentKey
-        ) {
-            await prepareSwissImageRaster();
-        }
+           if (coloredAnyNodes) {
+               setStatus("SWISSIMAGE RGB applied.");
+           }
+       } catch (error) {
+           console.error("[swiss-copc] SWISSIMAGE RGB failed:", error);
+           setStatus(`SWISSIMAGE RGB failed: ${error.message}`);
+       } finally {
+           if (progressShown) {
+               hideSwissImageProgress();
+           }
 
-        await colorVisiblePointNodes(
-            (done, total) => {
-                showSwissImageProgress(done, total);
-            }
-        );
-
-        setStatus("SWISSIMAGE RGB applied.");
-
-        /*
-         * Processing for this raster is complete.
-         * Do not allow the processing timer to immediately
-         * start the same operation again.
-         */
-        stopSwissImageProcessing();
-
-    } catch (error) {
-        console.error(
-            "SWISSIMAGE RGB failed:",
-            error
-        );
-
-        setStatus(
-            `SWISSIMAGE RGB failed: ${error.message}`
-        );
-    } finally {
-        hideSwissImageProgress();
-        swissImageProcessRunning = false;
-    }
-}
+           swissImageProcessRunning = false;
+       }
+   }
 
 /* ============================================================
    SWISSIMAGE RASTER PREPARATION
@@ -2735,7 +2709,7 @@ async function colorVisiblePointNodes(
         currentPointCloud.visibleNodes;
 
     if (!Array.isArray(nodes)) {
-        return;
+        return false;
     }
 
     const rasterKey =
@@ -2779,7 +2753,7 @@ async function colorVisiblePointNodes(
 
     if (!total) {
         onProgress(0, 0);
-        return;
+        return false;
     }
 
     swissImageColoring = true;
@@ -2821,6 +2795,8 @@ async function colorVisiblePointNodes(
     } finally {
         swissImageColoring = false;
     }
+
+    return true;
 }
 
 /* ============================================================

@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_8");
+ setStatus("d_9");
 
 
 
@@ -2720,6 +2720,14 @@ async function colorGeometryFromSwissImage(
         await yieldToBrowser();
     }
 
+    console.log(
+        "[swiss-copc] RGBA sample:",
+        Array.from(
+            color.array.slice(0, 16)
+        ),
+        "version:",
+        color.version
+    );
     color.needsUpdate = true;
 
     geometry.userData.swissImageColoredFor =

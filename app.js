@@ -9,6 +9,8 @@
  * Potree uses jQuery's "$()" internally.
  */
 
+ setStatus("V1");
+
 
 /* ============================================================
    GLOBAL STATE

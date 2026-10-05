@@ -143,7 +143,7 @@ function initPotree() {
 // Leaflet map
 // ------------------------------------------------------------
 
-const map = L.map("map", {
+map = L.map("map", {
     zoomControl: true,
     attributionControl: true,
     preferCanvas: true

@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_27-1");
+ setStatus("d_29");
 
 
 
@@ -2600,16 +2600,6 @@ function yieldToBrowser() {
             );
         };
 
-        console.log("[swiss-copc] CRS check", {
-            local: [x, y, z],
-            matrixWorld: Array.from(e),
-            rawXY,
-            asLV95_lonLat: asLV95,
-            asLV95_insideTile: insideBbox(asLV95, tileBbox),
-            as3857_lonLat: asWebMercator,
-            as3857_insideTile: insideBbox(asWebMercator, tileBbox),
-            tileBbox
-        });
     }
 
     // LV95 -> WGS84 longitude/latitude -> Web Mercator.
@@ -2686,21 +2676,22 @@ rasterExtent: {
 
                const rgb = getSwissImagePixel(raster, ix, iy);
 
-               if (i === 0) {
-    console.log("[swiss-copc] sampled color", {
-        pixel: [ix, iy],
-        rgb,
-        attributeName: color.name,
-        itemSize: color.itemSize,
-        normalized: color.normalized,
-        storedRGBA: [rgb[0], rgb[1], rgb[2], 255]
-    });
-}
-
                colors[c] = rgb[0];
                colors[c + 1] = rgb[1];
                colors[c + 2] = rgb[2];
                colors[c + 3] = 255;
+
+               // Temporary diagnostic: confirm the sampled RGB was written
+               // into the geometry's actual color buffer.
+               if (i === 0) {
+                   console.log("[swiss-copc] buffer write check", {
+                       rgb,
+                       written: Array.from(colors.slice(c, c + 4)),
+                       attribute: Array.from(color.array.slice(c, c + 4)),
+                       sameArray: colors === color.array
+                   });
+               }
+
            }
 
            onProgress(end);
@@ -2726,22 +2717,10 @@ rasterExtent: {
            }
        );
 
-       const colorAttr = geometry.attributes.color;
-const rgbaAttr = geometry.attributes.rgba;
-const material = currentPointCloud?.material;
-
-console.log("[swiss-copc] render check", {
-    colorAndRgbaAreSameAttribute: colorAttr === rgbaAttr,
-    colorItemSize: colorAttr?.itemSize,
-    colorNormalized: colorAttr?.normalized,
-    firstColorValues: colorAttr
-        ? Array.from(colorAttr.array.slice(0, 16))
-        : null,
-    pointColorType: material?.pointColorType,
-    rgbEnum: Potree.PointColorType?.RGB,
-    isRGBMode:
-        material?.pointColorType === Potree.PointColorType?.RGB
-});
+       console.log(
+           "[swiss-copc] RGB selected:",
+           currentPointCloud?.material?.pointColorType === "RGB"
+       );
 
        geometry.userData.swissImageColoredFor = rasterKey;
 

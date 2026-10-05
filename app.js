@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_7");
+ setStatus("d_8");
 
 
 
@@ -880,6 +880,25 @@ function applyColorMode(pointcloud, mode) {
             material,
             "RGB"
         );
+        console.log(
+    "[swiss-copc] RGB material state:",
+    {
+        pointColorType: material.pointColorType,
+        activeAttributeName: material.activeAttributeName,
+        pointColorTypeRGB:
+            Potree.PointColorType?.RGB,
+        geometryAttributes:
+            currentPointCloud?.visibleNodes?.[0]
+                ?.sceneNode
+                ?.geometry
+                ?.attributes
+                ? Object.keys(
+                    currentPointCloud.visibleNodes[0]
+                        .sceneNode.geometry.attributes
+                )
+                : []
+    }
+);
 
         if (!ok) {
             setStatus(

@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("B_13");
+ setStatus("B_14");
 
  proj4.defs(
      "EPSG:2056",
@@ -3356,9 +3356,6 @@ async function prepareSwissImageRaster() {
                 "EPSG:3857",
                 ne
             );
-
-        const sw3857 = proj4("EPSG:2056", "EPSG:3857", sw);
-        const ne3857 = proj4("EPSG:2056", "EPSG:3857", ne);
 
 
         const MAX_RASTER_PIXELS = 8 * 1024 * 1024; // 32 MB for RGBA canvas pixels

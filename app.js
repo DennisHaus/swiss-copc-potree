@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_10");
+ setStatus("d_11");
 
 
 
@@ -2631,6 +2631,22 @@ async function colorGeometryFromSwissImage(
             /*
              * THREE.Matrix4 is column-major.
              */
+             if (i === start) {
+                 console.log(
+                     "[swiss-copc] Point-cloud matrix diagnostic:",
+                     {
+                         matrix: Array.from(e),
+                         translation: [
+                             e[12],
+                             e[13],
+                             e[14]
+                         ],
+                         local: [x, y, z]
+                     }
+                 );
+             }
+
+
             const worldX =
                 e[0] * x +
                 e[4] * y +
@@ -2655,25 +2671,7 @@ async function colorGeometryFromSwissImage(
                     "EPSG:3857",
                     lv95
                 );
-                if (i === start) {
-    console.log(
-        "[swiss-copc] RGB coordinate diagnostic:",
-        {
-            local: [x, y, z],
-            world: [worldX, worldY],
-            lv95: [...lv95],
-            mercator: [...mercator],
-            raster: {
-                minX: raster.worldMinX,
-                maxX: raster.worldMaxX,
-                minY: raster.worldMinY,
-                maxY: raster.worldMaxY,
-                width: raster.width,
-                height: raster.height
-            }
-        }
-    );
-}
+
 
             /*
              * WebMercator -> raster pixel.

@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("A_6");
+ setStatus("A_7");
 
 
 
@@ -495,85 +495,50 @@ function initUI() {
    BUTTON STATE
    ============================================================ */
 
-function updateControlState() {
+   function updateControlState() {
+       const loadButton = getEl("loadButton");
+       const unloadButton = getEl("unloadButton");
+       const downloadButton = getEl("downloadButton");
 
-    const hasTile =
-        !!currentTile;
+       const horizontalButton = getEl("horizontalSectionButton");
+       const verticalButton = getEl("verticalSectionButton");
+       const clearSectionButton = getEl("clearSectionButton");
 
-    const hasPointCloud =
-        !!currentPointCloud;
+       const colorMode = getEl("color-mode");
 
+       const hasTile = !!currentTile;
+       const hasPointCloud = !!currentPointCloud;
+       const hasSection = !!currentSection;
+       const hasDownload = hasTile && !!getCopcUrl(currentTile);
 
-    const loadButton =
-        getEl("loadButton");
+       if (loadButton) {
+           loadButton.disabled = !hasTile || hasPointCloud;
+       }
 
-    const unloadButton =
-        getEl("unloadButton");
+       if (unloadButton) {
+           unloadButton.disabled = !hasPointCloud;
+       }
 
-    const downloadButton =
-        getEl("downloadButton");
+       if (downloadButton) {
+           downloadButton.disabled = !hasDownload;
+       }
 
-    const horizontalButton =
-        getEl("horizontalSectionButton");
+       if (horizontalButton) {
+           horizontalButton.disabled = !hasPointCloud;
+       }
 
-    const verticalButton =
-        getEl("verticalSectionButton");
+       if (verticalButton) {
+           verticalButton.disabled = !hasPointCloud;
+       }
 
-    const clearSectionButton =
-        getEl("clearSectionButton");
+       if (clearSectionButton) {
+           clearSectionButton.disabled = !hasSection;
+       }
 
-
-    /*
-     * Selected tile:
-     * Load and Download become available.
-     */
-    if (loadButton) {
-
-        loadButton.enabled =
-            !hasTile ||
-            hasPointCloud;
-    }
-
-
-    if (downloadButton) {
-
-        downloadButton.enabled =
-            !hasTile;
-    }
-
-
-    /*
-     * Loaded point cloud:
-     * Unload and sections become available.
-     */
-    if (unloadButton) {
-
-        unloadButton.disabled =
-            !hasPointCloud;
-    }
-
-
-    if (horizontalButton) {
-
-        horizontalButton.disabled =
-            !hasPointCloud;
-    }
-
-
-    if (verticalButton) {
-
-        verticalButton.enabled =
-            !hasPointCloud;
-    }
-
-
-    if (clearSectionButton) {
-
-        clearSectionButton.enabled =
-            !currentSection;
-    }
-}
-
+       if (colorMode) {
+           colorMode.disabled = !hasPointCloud;
+       }
+   }
 
 /* ============================================================
    STAC TILE SEARCH
@@ -1666,7 +1631,7 @@ function configurePointCloud(
      */
     applyColorMode(
         pointcloud,
-        "swissimage"
+        "intensity"
     );
 
 

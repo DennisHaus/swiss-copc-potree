@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("A_1");
+ setStatus("A_2");
 
 
 

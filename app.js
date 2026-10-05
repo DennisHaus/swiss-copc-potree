@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("D_1");
+
 
 
 const EPSG2056_DEF =
@@ -3004,12 +3004,4 @@ window.swissCOPC = {
 
     clearSection:
         () => clearSection()
-};
-'''
-
-path = "/mnt/data/app.js"
-with open(path, "w", encoding="utf-8") as f:
-    f.write(code)
-
-print(path)
-print(f"{len(code):,} characters")
+}

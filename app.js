@@ -400,9 +400,9 @@ async function findTilesFromMap() {
         );
 
         url.searchParams.set(
-            "limit",
-            CONFIG.MAX_TILES || 200
-        );
+    "limit",
+    Math.min(CONFIG.MAX_TILES || 100, 100)
+);
 
         const response =
             await fetch(url);
@@ -422,6 +422,17 @@ async function findTilesFromMap() {
             )
                 ? data.features
                 : [];
+
+                console.log(
+    "STAC returned:",
+    currentTiles.length,
+    "tiles"
+);
+
+console.log(
+    "First tile:",
+    currentTiles[0]
+);
 
         renderTiles();
 
@@ -443,60 +454,64 @@ async function findTilesFromMap() {
    RENDER TILE RESULTS
    ============================================================ */
 
-function renderTiles() {
-    const list =
-        getEl("tile-list");
+   function renderTiles() {
+       const list = getEl("tile-list");
+       const count = getEl("tile-count");
 
-    const count =
-        getEl("tile-count");
+       if (list) {
+           list.innerHTML = "";
+       }
 
+       if (count) {
+           count.textContent = String(currentTiles.length);
+       }
 
-    if (list) {
-        list.innerHTML = "";
-    }
+       // Remove old map footprints
+       for (const layer of tileLayers.values()) {
+           try {
+               map.removeLayer(layer);
+           } catch (error) {
+               console.warn(error);
+           }
+       }
 
+       tileLayers.clear();
+       selectedTileKey = null;
 
-    if (count) {
-        count.textContent =
-            String(
-                currentTiles.length
-            );
-    }
+       // Render new tiles
+       currentTiles.forEach((tile, index) => {
+           renderTileOnMap(tile, index);
+           renderTileInList(tile, index);
+       });
 
+       // IMPORTANT:
+       // Zoom the map to the returned tile footprints.
+       if (tileLayers.size > 0) {
+           const layers = Array.from(tileLayers.values());
 
-    if (tileLayerGroup) {
-        tileLayerGroup.clearLayers();
-    }
+           const group = L.featureGroup(layers);
 
+           const bounds = group.getBounds();
 
-    currentTiles.forEach(
-        (tile, index) => {
-            renderTileOnMap(
-                tile,
-                index
-            );
+           if (bounds.isValid()) {
+               map.fitBounds(bounds, {
+                   padding: [30, 30],
+                   maxZoom: 15
+               });
+           }
+       }
 
-            renderTileInList(
-                tile,
-                index
-            );
-        }
-    );
-}
-
+       console.log(
+           "Rendered tile footprints:",
+           tileLayers.size
+       );
+   }
 
 /* ============================================================
    TILE FOOTPRINT ON MAP
    ============================================================ */
 
-   function tileKey(tile, index) {
-       return (
-           tile.id ||
-           tile.properties?.id ||
-           tile.properties?.title ||
-           `tile-${index}`
-       );
-   }
+
 
    function geometryFromTile(tile) {
        if (tile.geometry) {
@@ -523,14 +538,55 @@ function renderTiles() {
    }
 
    function tileKey(tile, index) {
-    return (
-        tile.id ||
-        tile.properties?.id ||
-        tile.properties?.title ||
-        tile.properties?.name ||
-        `tile-${index}`
-    );
-}
+       return (
+           tile.id ||
+           tile.properties?.id ||
+           tile.properties?.title ||
+           tile.properties?.name ||
+           `tile-${index}`
+       );
+   }
+
+
+   function geometryFromTile(tile) {
+
+       // Standard STAC geometry
+       if (tile.geometry) {
+           return tile.geometry;
+       }
+
+       // Fallback if geometry happens to be nested
+       if (tile.properties?.geometry) {
+           return tile.properties.geometry;
+       }
+
+       // STAC bbox is WGS84 lon/lat
+       if (
+           Array.isArray(tile.bbox) &&
+           tile.bbox.length >= 4
+       ) {
+           const [
+               west,
+               south,
+               east,
+               north
+           ] = tile.bbox;
+
+           return {
+               type: "Polygon",
+
+               coordinates: [[
+                   [west, south],
+                   [east, south],
+                   [east, north],
+                   [west, north],
+                   [west, south]
+               ]]
+           };
+       }
+
+       return null;
+   }
 
 
 function geometryFromTile(tile) {
@@ -579,7 +635,7 @@ function renderTileOnMap(tile, index) {
 
     if (!geometry) {
         console.warn(
-            "Tile has no usable geometry:",
+            "Tile has no geometry or bbox:",
             tile
         );
 
@@ -589,20 +645,10 @@ function renderTileOnMap(tile, index) {
     const key = tileKey(tile, index);
 
     console.log(
-        "Rendering tile footprint:",
+        "Adding tile to map:",
         key,
         geometry
     );
-
-    console.log(
-    "CURRENT TILES:",
-    currentTiles
-);
-
-console.log(
-    "NUMBER OF TILES:",
-    currentTiles.length
-);
 
     const layer = L.geoJSON(
         geometry,
@@ -617,49 +663,54 @@ console.log(
                 opacity: 1,
 
                 fillColor: "#3b82f6",
-                fillOpacity: 0.25
+                fillOpacity: 0.28
             }
         }
     );
 
     layer.addTo(map);
 
-    layer.on("click", function(event) {
+    layer.on("click", event => {
 
         L.DomEvent.stopPropagation(event);
 
         console.log(
-            "Tile clicked:",
+            "TILE CLICKED:",
             key
         );
 
-        selectTile(tile, index);
+        selectTile(
+            tile,
+            index
+        );
     });
 
-    layer.on("mouseover", function() {
+    layer.on("mouseover", () => {
 
-        if (selectedTileKey !== key) {
-
+        if (
+            selectedTileKey !== key
+        ) {
             layer.setStyle({
                 color: "#60a5fa",
                 weight: 3,
                 fillColor: "#60a5fa",
-                fillOpacity: 0.35
+                fillOpacity: 0.40
             });
         }
 
         layer.bringToFront();
     });
 
-    layer.on("mouseout", function() {
+    layer.on("mouseout", () => {
 
-        if (selectedTileKey !== key) {
-
+        if (
+            selectedTileKey !== key
+        ) {
             layer.setStyle({
                 color: "#2563eb",
                 weight: 2,
                 fillColor: "#3b82f6",
-                fillOpacity: 0.25
+                fillOpacity: 0.28
             });
         }
     });
@@ -671,49 +722,33 @@ console.log(
 
     return layer;
 }
+
+
 /* ============================================================
    TILE LIST
    ============================================================ */
 
-function renderTileInList(
-    tile,
-    index
-) {
-    const list =
-        getEl("tile-list");
+   function renderTileInList(tile, index) {
+       const list = getEl("tile-list");
+       if (!list) return;
 
-    if (!list) {
-        return;
-    }
+       const item = document.createElement("button");
+       item.type = "button";
+       item.className = "tile-item";
 
-    const item =
-        document.createElement(
-            "button"
-        );
+       const name =
+           tile.properties?.title ||
+           tile.id ||
+           `Tile ${index + 1}`;
 
-    item.type = "button";
+       item.textContent = name;
 
-    item.className =
-        "tile-item";
+       item.addEventListener("click", () => {
+           selectTile(tile, index);
+       });
 
-    const name =
-        tile.properties?.title ||
-        tile.id ||
-        `Tile ${index + 1}`;
-
-    item.textContent =
-        name;
-
-    item.addEventListener(
-        "click",
-        () => {
-            selectTile(tile);
-        }
-    );
-
-    list.appendChild(item);
-}
-
+       list.appendChild(item);
+   }
 
 /* ============================================================
    SELECT TILE

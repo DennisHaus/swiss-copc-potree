@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("B_16");
+ setStatus("B_17");
 
  proj4.defs(
      "EPSG:2056",
@@ -3213,11 +3213,11 @@ function startSwissImageProcessing() {
     processSwissImageRGB();
 
 
-    //SWISSIMAGE_RGB.processTimer =
-      //  window.setInterval(
-        //    processSwissImageRGB,
-          //  1500
-        //);
+    SWISSIMAGE_RGB.processTimer =
+       window.setInterval(
+           processSwissImageRGB,
+           1500
+        );
 }
 
 async function processSwissImageRGB() {
@@ -3851,33 +3851,35 @@ function tileToMercator(
         * Use normalized Uint8 RGB: 3 bytes per point instead of 12 bytes
         * for Float32 RGB. Potree/Three.js converts normalized values to 0..1.
         */
-       let color = geometry.attributes.color;
+        const color = geometry.attributes.color;
 
-       if (
-           !color ||
-           !(color.array instanceof Uint8Array) ||
-           color.itemSize !== 3 ||
-           !color.normalized ||
-           color.count !== count
-       ) {
-           color = new THREE.BufferAttribute(
-               new Uint8Array(count * 3),
-               3,
-               true
-           );
-           geometry.setAttribute("color", color);
-       }
+  if (
+      !color ||
+      color.count !== count ||
+      (color.itemSize !== 3 && color.itemSize !== 4)
+  ) {
+      console.warn(
+          "SWISSIMAGE RGB skipped: no compatible existing color attribute.",
+          geometry.attributes
+      );
+      return false;
+  }
 
-       const positions = position.array;
-       const colors = color.array;
-       const e = sceneNode.matrixWorld.elements;
+  const colors = color.array;
+  const colorItemSize = color.itemSize;
+  const isFloat = colors instanceof Float32Array;
+  const isNormalizedByte =
+      colors instanceof Uint8Array && color.normalized;
 
-       const worldWidth = raster.worldMaxX - raster.worldMinX;
-       const worldHeight = raster.worldMaxY - raster.worldMinY;
-
-       if (!worldWidth || !worldHeight || !raster.width || !raster.height) {
-           return false;
-       }
+  if (!isFloat && !isNormalizedByte) {
+      console.warn(
+          "SWISSIMAGE RGB skipped: unsupported existing color format.",
+          colors.constructor.name,
+          "normalized:",
+          color.normalized
+      );
+      return false;
+  }
 
        const scaleX = raster.width / worldWidth;
        const scaleY = raster.height / worldHeight;
@@ -3911,9 +3913,12 @@ function tileToMercator(
                }
 
                const rgb = getSwissImagePixel(raster, ix, iy);
-               colors[j] = rgb[0];
-               colors[j + 1] = rgb[1];
-               colors[j + 2] = rgb[2];
+               const c = i * colorItemSize;
+const scale = isFloat ? 1 / 255 : 1;
+
+colors[c]     = rgb[0] * scale;
+colors[c + 1] = rgb[1] * scale;
+colors[c + 2] = rgb[2] * scale;
            }
 
            // Tell Three.js the attribute changed, then let the browser render

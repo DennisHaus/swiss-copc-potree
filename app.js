@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_12");
+ setStatus("d_13");
 
 
 
@@ -2663,6 +2663,21 @@ async function colorGeometryFromSwissImage(
                 e[5] * y +
                 e[9] * z +
                 e[13];
+
+                if (i === start) {
+    const lonLat = proj4(
+        "EPSG:2056",
+        "EPSG:4326",
+        [worldX, worldY]
+    );
+
+    console.log("[alignment check]", {
+        localPoint: [x, y, z],
+        transformedWorld: [worldX, worldY],
+        interpretedAsLV95_lonLat: lonLat, // [longitude, latitude]
+        selectedTileBbox: currentTile.bbox
+    });
+}
 
             lv95[0] = worldX;
             lv95[1] = worldY;

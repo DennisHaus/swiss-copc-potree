@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("B_11");
+ setStatus("B_12");
 
  proj4.defs(
      "EPSG:2056",
@@ -3218,66 +3218,34 @@ function startSwissImageProcessing() {
         );
 }
 
-
 async function processSwissImageRGB() {
+    if (!currentPointCloud || !currentTile) return;
 
-    if (
-        !currentPointCloud ||
-        !currentTile
-    ) {
+    const selector = getEl("color-mode");
+    if (selector && selector.value !== "swissimage") return;
 
-        return;
-    }
-
-
-    /*
-     * Only do this when SWISSIMAGE RGB is selected.
-     */
-    const selector =
-        getEl("color-mode");
-
-
-    if (
-        selector &&
-        selector.value !==
-            "swissimage"
-    ) {
-
-        return;
-    }
-
+    showSwissImageProgress(0, 1, "Preparing SWISSIMAGE…");
 
     try {
-
         if (
             !SWISSIMAGE_RGB.raster ||
-            SWISSIMAGE_RGB.raster.tileKey !==
-                tileKey(
-                    currentTile,
-                    0
-                )
+            SWISSIMAGE_RGB.raster.tileKey !== tileKey(currentTile, 0)
         ) {
-
             await prepareSwissImageRaster();
         }
 
-
-        colorVisiblePointNodes();
-
+        await colorVisiblePointNodes((done, total) => {
+            showSwissImageProgress(done, total);
+        });
     } catch (error) {
+        console.error("SWISSIMAGE RGB failed:", error);
 
-        console.error(
-            "SWISSIMAGE RGB failed:",
-            error
-        );
-
-
-        setStatus(
-            `SWISSIMAGE RGB failed: ${error.message}`
-        );
+        const message = error?.message ?? String(error);
+        setStatus(`SWISSIMAGE RGB failed: ${message}`);
+    } finally {
+        hideSwissImageProgress();
     }
 }
-
 
 /* ============================================================
    PREPARE SWISSIMAGE RASTER
@@ -3755,90 +3723,276 @@ function tileToMercator(
    COLOR VISIBLE POTREE NODES
    ============================================================ */
 
-function colorVisiblePointNodes() {
+   // Keep only a bounded set of small canvas pixel blocks in memory.
+   const swissImageBlockCaches = new WeakMap();
+   const SWISSIMAGE_BLOCK_SIZE = 256;
+   const SWISSIMAGE_MAX_CACHED_BLOCKS = 64; // About 16 MB of RGBA pixel data.
+   const SWISSIMAGE_BATCH_SIZE = 10_000;
 
-    if (
-        !currentPointCloud ||
-        !SWISSIMAGE_RGB.raster
-    ) {
+   function getSwissImagePixel(raster, x, y) {
+       let cache = swissImageBlockCaches.get(raster);
 
-        return;
-    }
+       if (!cache) {
+           cache = new Map();
+           swissImageBlockCaches.set(raster, cache);
+       }
 
+       const blockX = Math.floor(x / SWISSIMAGE_BLOCK_SIZE);
+       const blockY = Math.floor(y / SWISSIMAGE_BLOCK_SIZE);
+       const key = `${blockX},${blockY}`;
 
-    const nodes =
-        currentPointCloud.visibleNodes;
+       let block = cache.get(key);
 
+       if (block) {
+           // Refresh its position in the LRU cache.
+           cache.delete(key);
+           cache.set(key, block);
+       } else {
+           const x0 = blockX * SWISSIMAGE_BLOCK_SIZE;
+           const y0 = blockY * SWISSIMAGE_BLOCK_SIZE;
+           const width = Math.min(SWISSIMAGE_BLOCK_SIZE, raster.width - x0);
+           const height = Math.min(SWISSIMAGE_BLOCK_SIZE, raster.height - y0);
 
-    if (
-        !Array.isArray(nodes)
-    ) {
+           block = {
+               x0,
+               y0,
+               width,
+               data: raster.context.getImageData(x0, y0, width, height).data
+           };
 
-        return;
-    }
+           cache.set(key, block);
 
+           if (cache.size > SWISSIMAGE_MAX_CACHED_BLOCKS) {
+               cache.delete(cache.keys().next().value);
+           }
+       }
 
-    let processed =
-        0;
+       const offset = (
+           ((y - block.y0) * block.width) +
+           (x - block.x0)
+       ) * 4;
 
+       return block.data.subarray(offset, offset + 3);
+   }
 
-    for (
-        const node of nodes
-    ) {
+   function showSwissImageProgress(done, total, message = "Coloring SWISSIMAGE…") {
+       let box = document.getElementById("swissimage-progress");
 
-        const sceneNode =
-            node?.sceneNode;
+       if (!box) {
+           box = document.createElement("div");
+           box.id = "swissimage-progress";
+           box.style.cssText = `
+               position:fixed; right:20px; bottom:20px; z-index:10000;
+               width:270px; padding:12px 16px; border-radius:8px;
+               color:white; background:rgba(25,25,25,.93);
+               font:14px sans-serif; box-shadow:0 2px 12px #0006;
+           `;
+           box.innerHTML = `
+               <div style="display:flex;align-items:center;gap:10px">
+                   <span style="
+                       width:18px;height:18px;flex:none;
+                       border:3px solid #888;border-top-color:white;
+                       border-radius:50%;animation:swissimage-spin .8s linear infinite
+                   "></span>
+                   <span data-message></span>
+               </div>
+               <div style="margin-top:9px;height:5px;background:#555;border-radius:4px">
+                   <div data-bar style="
+                       height:100%;width:0;background:#49a5ff;border-radius:4px
+                   "></div>
+               </div>
+           `;
 
+           if (!document.getElementById("swissimage-progress-style")) {
+               const style = document.createElement("style");
+               style.id = "swissimage-progress-style";
+               style.textContent =
+                   "@keyframes swissimage-spin { to { transform: rotate(360deg) } }";
+               document.head.appendChild(style);
+           }
 
-        const geometry =
-            sceneNode?.geometry;
+           document.body.appendChild(box);
+       }
 
+       const percent = total
+           ? Math.min(100, Math.round(done * 100 / total))
+           : 0;
 
-        if (!geometry) {
-            continue;
-        }
+       box.querySelector("[data-message]").textContent =
+           `${message} ${percent}%`;
+       box.querySelector("[data-bar]").style.width = `${percent}%`;
+   }
 
+   function hideSwissImageProgress() {
+       document.getElementById("swissimage-progress")?.remove();
+   }
 
-        if (
-            SWISSIMAGE_RGB
-                .pointCloudsProcessed
-                .has(
-                    geometry
-                )
-        ) {
+   function yieldToBrowser() {
+       return new Promise(resolve => setTimeout(resolve, 0));
+   }
 
-            continue;
-        }
+   async function colorGeometryFromSwissImage(sceneNode, rasterKey, onProgress) {
+       const geometry = sceneNode?.geometry;
+       const position = geometry?.attributes?.position;
+       const raster = SWISSIMAGE_RGB.raster;
 
+       if (!position || !raster?.context) return false;
 
-        const changed =
-            colorGeometryFromSwissImage(
-                sceneNode
-            );
+       geometry.userData ??= {};
 
+       if (geometry.userData.swissImageColoredFor === rasterKey) {
+           return false;
+       }
 
-        if (changed) {
+       const count = position.count;
+       if (!count) return false;
 
-            SWISSIMAGE_RGB
-                .pointCloudsProcessed
-                .add(
-                    geometry
-                );
+       /*
+        * Use normalized Uint8 RGB: 3 bytes per point instead of 12 bytes
+        * for Float32 RGB. Potree/Three.js converts normalized values to 0..1.
+        */
+       let color = geometry.attributes.color;
 
-            processed++;
-        }
-    }
+       if (
+           !color ||
+           !(color.array instanceof Uint8Array) ||
+           color.itemSize !== 3 ||
+           !color.normalized ||
+           color.count !== count
+       ) {
+           color = new THREE.BufferAttribute(
+               new Uint8Array(count * 3),
+               3,
+               true
+           );
+           geometry.setAttribute("color", color);
+       }
 
+       const positions = position.array;
+       const colors = color.array;
+       const e = sceneNode.matrixWorld.elements;
 
-    if (processed > 0) {
+       const worldWidth = raster.worldMaxX - raster.worldMinX;
+       const worldHeight = raster.worldMaxY - raster.worldMinY;
 
-        console.log(
-            "[swiss-copc] SWISSIMAGE-colored nodes:",
-            processed
-        );
-    }
-}
+       if (!worldWidth || !worldHeight || !raster.width || !raster.height) {
+           return false;
+       }
 
+       const scaleX = raster.width / worldWidth;
+       const scaleY = raster.height / worldHeight;
+       const lv95 = [0, 0];
+
+       for (let start = 0; start < count; start += SWISSIMAGE_BATCH_SIZE) {
+           const end = Math.min(start + SWISSIMAGE_BATCH_SIZE, count);
+
+           for (let i = start; i < end; i++) {
+               const j = i * 3;
+               const x = positions[j];
+               const y = positions[j + 1];
+               const z = positions[j + 2];
+
+               // Transform node-local position to world coordinates.
+               lv95[0] = e[0] * x + e[4] * y + e[8] * z + e[12];
+               lv95[1] = e[1] * x + e[5] * y + e[9] * z + e[13];
+
+               const mercator = proj4("EPSG:2056", "EPSG:3857", lv95);
+
+               const ix = Math.floor(
+                   (mercator[0] - raster.worldMinX) * scaleX
+               );
+               const iy = Math.floor(
+                   (raster.worldMaxY - mercator[1]) * scaleY
+               );
+
+               if (ix < 0 || iy < 0 || ix >= raster.width || iy >= raster.height) {
+                   colors[j] = colors[j + 1] = colors[j + 2] = 128;
+                   continue;
+               }
+
+               const rgb = getSwissImagePixel(raster, ix, iy);
+               colors[j] = rgb[0];
+               colors[j + 1] = rgb[1];
+               colors[j + 2] = rgb[2];
+           }
+
+           // Tell Three.js the attribute changed, then let the browser render
+           // the progress indicator and respond to other events.
+
+           onProgress(end);
+
+           await yieldToBrowser();
+       }
+       color.needsUpdate = true;
+       geometry.userData.swissImageColoredFor = rasterKey;
+       return true;
+   }
+
+   let swissImageColoring = false;
+
+   async function colorVisiblePointNodes(onProgress = () => {}) {
+       if (
+           swissImageColoring ||
+           !currentPointCloud ||
+           !SWISSIMAGE_RGB.raster
+       ) {
+           return;
+       }
+
+       const nodes = currentPointCloud.visibleNodes;
+       if (!Array.isArray(nodes)) return;
+
+       const rasterKey =
+           SWISSIMAGE_RGB.raster.tileKey ?? "current-raster";
+
+       const pending = [];
+
+       for (const node of nodes) {
+           const sceneNode = node?.sceneNode;
+           const geometry = sceneNode?.geometry;
+           const position = geometry?.attributes?.position;
+
+           if (
+               geometry &&
+               position &&
+               geometry.userData?.swissImageColoredFor !== rasterKey
+           ) {
+               pending.push({ sceneNode, count: position.count });
+           }
+       }
+
+       const total = pending.reduce((sum, item) => sum + item.count, 0);
+
+       if (!total) {
+           onProgress(0, 0);
+           return;
+       }
+
+       swissImageColoring = true;
+       let done = 0;
+
+       try {
+           for (const item of pending) {
+               const sceneNode = item.sceneNode;
+               sceneNode.updateMatrixWorld?.(true);
+
+               await colorGeometryFromSwissImage(
+                   sceneNode,
+                   rasterKey,
+                   pointsInNode => {
+                       onProgress(done + pointsInNode, total);
+                   }
+               );
+
+               done += item.count;
+               onProgress(done, total);
+
+               await yieldToBrowser();
+           }
+       } finally {
+           swissImageColoring = false;
+       }
+   }
 
 /* ============================================================
    COLOR ONE GEOMETRY

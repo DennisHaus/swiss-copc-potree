@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_5");
+ setStatus("d_6");
 
 
 
@@ -2690,6 +2690,7 @@ async function colorGeometryFromSwissImage(
     colors[c + 3] =
         255;
 
+}
         onProgress(end);
 
         await yieldToBrowser();

@@ -9,7 +9,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("v4");
+ setStatus("v5");
 
 
 /* ============================================================
@@ -612,6 +612,69 @@ console.log("First geometry:", data.features?.[0]?.geometry);
     }
 }
 
+
+function renderTileOnMap(tile, index) {
+    const geometry = geometryFromTile(tile);
+
+    if (!geometry) {
+        console.warn("No geometry for tile:", tile);
+        return null;
+    }
+
+    const key = tileKey(tile, index);
+
+    console.log("Drawing tile:", key);
+
+    const layer = L.geoJSON(geometry, {
+        pane: "tileFootprints",
+        interactive: true,
+
+        style: {
+            color: "#0066ff",
+            weight: 3,
+            opacity: 1,
+            fillColor: "#1683ff",
+            fillOpacity: 0.28
+        }
+    });
+
+    layer.addTo(map);
+
+    layer.on("click", function (event) {
+        L.DomEvent.stopPropagation(event);
+        selectTile(tile, index);
+    });
+
+    layer.on("mouseover", function () {
+        if (selectedTileKey !== key) {
+            layer.setStyle({
+                color: "#00a8ff",
+                weight: 4,
+                fillColor: "#1683ff",
+                fillOpacity: 0.40
+            });
+        }
+
+        layer.bringToFront();
+    });
+
+    layer.on("mouseout", function () {
+        if (selectedTileKey !== key) {
+            layer.setStyle({
+                color: "#0066ff",
+                weight: 3,
+                fillColor: "#1683ff",
+                fillOpacity: 0.28
+            });
+        }
+    });
+
+    tileLayers.set(key, layer);
+
+    return layer;
+}
+
+
 /* ============================================================
    TILE FOOTPRINT ON MAP
    ============================================================ */
@@ -643,29 +706,27 @@ console.log("First geometry:", data.features?.[0]?.geometry);
 
 
     function geometryFromTile(tile) {
-        // STAC bbox is WGS84 and is the safest footprint to draw.
-        if (Array.isArray(tile.bbox) && tile.bbox.length >= 4) {
-            const [west, south, east, north] = tile.bbox;
+    if (Array.isArray(tile.bbox) && tile.bbox.length >= 4) {
+        const [west, south, east, north] = tile.bbox;
 
-            return {
-                type: "Polygon",
-                coordinates: [[
-                    [west, south],
-                    [east, south],
-                    [east, north],
-                    [west, north],
-                    [west, south]
-                ]]
-            };
-        }
-
-        // Fallback to GeoJSON geometry.
-        if (tile.geometry) {
-            return tile.geometry;
-        }
-
-        return null;
+        return {
+            type: "Polygon",
+            coordinates: [[
+                [west, south],
+                [east, south],
+                [east, north],
+                [west, north],
+                [west, south]
+            ]]
+        };
     }
+
+    if (tile.geometry) {
+        return tile.geometry;
+    }
+
+    return null;
+}
 
 /* ============================================================
    TILE LIST

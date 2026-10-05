@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("B_18");
+ setStatus("B_19");
 
  proj4.defs(
      "EPSG:2056",
@@ -3842,6 +3842,10 @@ console.log("Geometry attribute check:", {
     rgbaArrayLength: a?.array?.length,
     rgbaItemSize: a?.itemSize,
     rgbaNormalized: a?.normalized,
+    rgbaArrayType: a?.array?.constructor?.name,
+  rgbaBytesPerElement: a?.array?.BYTES_PER_ELEMENT,
+  rgbaByteLength: a?.array?.byteLength,
+  rgbaStride: a?.data?.stride,
     rgbaBytesPerPosition:
         position?.count ? a?.array?.length / position.count : null,
 });

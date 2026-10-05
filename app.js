@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_14");
+ setStatus("d_15");
 
 
 
@@ -880,25 +880,6 @@ function applyColorMode(pointcloud, mode) {
             material,
             "RGB"
         );
-        console.log(
-    "[swiss-copc] RGB material state:",
-    {
-        pointColorType: material.pointColorType,
-        activeAttributeName: material.activeAttributeName,
-        pointColorTypeRGB:
-            Potree.PointColorType?.RGB,
-        geometryAttributes:
-            currentPointCloud?.visibleNodes?.[0]
-                ?.sceneNode
-                ?.geometry
-                ?.attributes
-                ? Object.keys(
-                    currentPointCloud.visibleNodes[0]
-                        .sceneNode.geometry.attributes
-                )
-                : []
-    }
-);
 
         if (!ok) {
             setStatus(
@@ -2686,6 +2667,14 @@ async function colorGeometryFromSwissImage(
     );
 
 }
+
+console.log("[swiss-copc] sampling transform", {
+    local: [x, y, z],
+    matrixWorld: sceneNode.matrixWorld.elements,
+    worldLV95: [world.x, world.y, world.z],
+    lonLat,
+    tileBbox: currentTile.bbox
+});
 
             lv95[0] = worldX;
             lv95[1] = worldY;

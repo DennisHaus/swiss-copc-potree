@@ -9,7 +9,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("v2");
+ setStatus("v3");
 
 
 /* ============================================================
@@ -111,13 +111,14 @@ function initPotree() {
     viewer = new Potree.Viewer(
         renderArea
     );
-
+viewer.setBackground("black");
+viewer.setBackground("black");
     viewer.setEDLEnabled(true);
 
     viewer.setFOV(60);
 
     viewer.setPointBudget(
-        CONFIG.POINT_BUDGET || 2000000
+        CONFIG.POINT_BUDGET || 20000000
     );
 
     /*
@@ -430,6 +431,12 @@ function initUI() {
            }
 
            const data = await response.json();
+
+           console.log("STAC response:", data);
+console.log("Number of features:", data.features?.length);
+console.log("First feature:", data.features?.[0]);
+console.log("First bbox:", data.features?.[0]?.bbox);
+console.log("First geometry:", data.features?.[0]?.geometry);
 
            console.log("STAC response:", data);
            console.log(

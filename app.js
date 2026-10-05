@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("A_2");
+ setStatus("A_3");
 
 
 
@@ -1662,11 +1662,11 @@ function configurePointCloud(
 
 
     /*
-     * Start with elevation.
+     * Start with intensity.
      */
     applyColorMode(
         pointcloud,
-        "elevation"
+        "intensity"
     );
 
 

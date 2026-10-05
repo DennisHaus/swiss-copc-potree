@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_22");
+ setStatus("d_23");
 
 
 
@@ -2685,6 +2685,17 @@ rasterExtent: {
                }
 
                const rgb = getSwissImagePixel(raster, ix, iy);
+
+               if (i === 0) {
+    console.log("[swiss-copc] sampled color", {
+        pixel: [ix, iy],
+        rgb,
+        attributeName: color.name,
+        itemSize: color.itemSize,
+        normalized: color.normalized,
+        storedRGBA: [rgb[0], rgb[1], rgb[2], 255]
+    });
+}
 
                colors[c] = rgb[0];
                colors[c + 1] = rgb[1];

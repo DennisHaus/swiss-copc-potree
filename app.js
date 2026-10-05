@@ -18,6 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
+ setStatus("d_2");
 
 
 
@@ -956,13 +957,27 @@ function applyColorMode(pointcloud, mode) {
 }
 
 function setPointColorType(material, name) {
+    if (!material) {
+        return false;
+    }
+
+    /*
+     * Potree 1.8 uses the PointColorType constants when
+     * available. Some builds expose RGB differently, so
+     * handle RGB explicitly.
+     */
+    if (name === "RGB") {
+        material.pointColorType = "RGB";
+        material.needsUpdate = true;
+        return true;
+    }
+
     if (!Potree.PointColorType) {
         return false;
     }
 
     if (
-        Potree.PointColorType[name] ===
-        undefined
+        Potree.PointColorType[name] === undefined
     ) {
         console.warn(
             `Potree.PointColorType.${name} is unavailable.`
@@ -972,6 +987,8 @@ function setPointColorType(material, name) {
 
     material.pointColorType =
         Potree.PointColorType[name];
+
+    material.needsUpdate = true;
 
     return true;
 }

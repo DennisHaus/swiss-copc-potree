@@ -9,7 +9,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("V1");
+ setStatus("v2");
 
 
 /* ============================================================
@@ -157,10 +157,11 @@ map = L.map("map", {
 // ------------------------------------------------------------
 
 map.createPane("tileFootprints");
-map.getPane("tileFootprints").style.zIndex = 650;
+map.getPane("tileFootprints").style.zIndex = 700;
 
 map.createPane("tileHighlight");
-map.getPane("tileHighlight").style.zIndex = 660;
+map.getPane("tileHighlight").style.zIndex = 710;
+
 // ------------------------------------------------------------
 // SwissTopo basemaps
 // ------------------------------------------------------------
@@ -486,61 +487,120 @@ function initUI() {
    ============================================================ */
 
    function renderTiles() {
-    const list = getEl("tile-list");
-    const count = getEl("tile-count");
+    const list =
+        getEl("tile-list");
+
+    const count =
+        getEl("tile-count");
+
 
     if (list) {
         list.innerHTML = "";
     }
 
+
     if (count) {
         count.textContent =
-            String(currentTiles.length);
+            String(
+                currentTiles.length
+            );
     }
 
-    // Remove previous footprints
-    for (const layer of tileLayers.values()) {
-        if (map.hasLayer(layer)) {
-            map.removeLayer(layer);
+
+    /*
+     * Remove old footprints.
+     */
+    for (
+        const layer of
+            tileLayers.values()
+    ) {
+
+        if (
+            map.hasLayer(layer)
+        ) {
+
+            map.removeLayer(
+                layer
+            );
         }
     }
 
+
     tileLayers.clear();
+
     selectedTileKey = null;
 
-    if (!currentTiles.length) {
+
+    if (
+        currentTiles.length === 0
+    ) {
+
         console.warn(
-            "No STAC tiles returned."
+            "[swiss-copc] No tiles returned."
         );
 
         return;
     }
 
+
     const footprintLayers = [];
 
-    currentTiles.forEach((tile, index) => {
-        const layer =
-            renderTileOnMap(tile, index);
 
-        if (layer) {
-            footprintLayers.push(layer);
+    currentTiles.forEach(
+        (tile, index) => {
+
+            const layer =
+                renderTileOnMap(
+                    tile,
+                    index
+                );
+
+
+            if (layer) {
+
+                footprintLayers.push(
+                    layer
+                );
+            }
+
+
+            renderTileInList(
+                tile,
+                index
+            );
         }
+    );
 
-        renderTileInList(tile, index);
-    });
 
     console.log(
-        "Rendered footprint layers:",
+        "[swiss-copc] Tiles returned:",
+        currentTiles.length
+    );
+
+
+    console.log(
+        "[swiss-copc] Footprints rendered:",
         footprintLayers.length
     );
 
-    // Zoom to the returned tiles
-    if (footprintLayers.length > 0) {
+
+    /*
+     * Zoom to all tile footprints.
+     */
+    if (
+        footprintLayers.length > 0
+    ) {
+
         const group =
-            L.featureGroup(footprintLayers);
+            L.featureGroup(
+                footprintLayers
+            );
+
 
         map.fitBounds(
-            group.getBounds().pad(0.05)
+            group
+                .getBounds()
+                .pad(0.05)
         );
     }
 }
@@ -549,31 +609,9 @@ function initUI() {
    TILE FOOTPRINT ON MAP
    ============================================================ */
 
-
-
-   function geometryFromTile(tile) {
-       if (tile.geometry) {
-           return tile.geometry;
-       }
-
-       // Fallback: create a polygon from STAC bbox
-       if (Array.isArray(tile.bbox) && tile.bbox.length >= 4) {
-           const [west, south, east, north] = tile.bbox;
-
-           return {
-               type: "Polygon",
-               coordinates: [[
-                   [west, south],
-                   [east, south],
-                   [east, north],
-                   [west, north],
-                   [west, south]
-               ]]
-           };
-       }
-
-       return null;
-   }
+   /* ============================================================
+      TILE GEOMETRY
+      ============================================================ */
 
    function tileKey(tile, index) {
        return (
@@ -586,19 +624,17 @@ function initUI() {
    }
 
 
+   /*
+    * swissSURFACE3D STAC items may have a Point geometry.
+    *
+    * For the map we want the COMPLETE tile footprint,
+    * so use the STAC bbox whenever it is available.
+    *
+    * STAC bbox order:
+    * [west, south, east, north]
+    */
+
    function geometryFromTile(tile) {
-
-       // Standard STAC geometry
-       if (tile.geometry) {
-           return tile.geometry;
-       }
-
-       // Fallback if geometry happens to be nested
-       if (tile.properties?.geometry) {
-           return tile.properties.geometry;
-       }
-
-       // STAC bbox is WGS84 lon/lat
        if (
            Array.isArray(tile.bbox) &&
            tile.bbox.length >= 4
@@ -623,109 +659,163 @@ function initUI() {
            };
        }
 
+
+       /*
+        * Only use the STAC geometry if there is no bbox.
+        */
+       if (tile.geometry) {
+           return tile.geometry;
+       }
+
+
+       if (tile.properties?.geometry) {
+           return tile.properties.geometry;
+       }
+
+
        return null;
    }
 
+   function renderTileOnMap(tile, index) {
+       const geometry =
+           geometryFromTile(tile);
 
-function geometryFromTile(tile) {
+       const key =
+           tileKey(tile, index);
 
-    // Normal STAC geometry
-    if (tile.geometry) {
-        return tile.geometry;
-    }
 
-    // Some responses may put geometry in properties
-    if (tile.properties?.geometry) {
-        return tile.properties.geometry;
-    }
+       console.log(
+           "[swiss-copc] Rendering tile:",
+           key
+       );
 
-    // STAC bbox fallback
-    if (
-        Array.isArray(tile.bbox) &&
-        tile.bbox.length >= 4
-    ) {
-        const [
-            west,
-            south,
-            east,
-            north
-        ] = tile.bbox;
+       console.log(
+           "[swiss-copc] Tile bbox:",
+           tile.bbox
+       );
 
-        return {
-            type: "Polygon",
-            coordinates: [[
-                [west, south],
-                [east, south],
-                [east, north],
-                [west, north],
-                [west, south]
-            ]]
-        };
-    }
+       console.log(
+           "[swiss-copc] Footprint geometry:",
+           geometry
+       );
 
-    return null;
-}
 
-function renderTileOnMap(tile, index) {
-    const geometry = geometryFromTile(tile);
+       if (!geometry) {
+           console.warn(
+               "[swiss-copc] Tile has no bbox or geometry:",
+               tile
+           );
 
-    const key = tileKey(tile, index);
+           return null;
+       }
 
-    console.log(
-        "Rendering tile:",
-        key
-    );
 
-    console.log(
-        "Geometry:",
-        geometry
-    );
+       /*
+        * Bright blue tile footprint.
+        */
+       const layer = L.geoJSON(
+           geometry,
+           {
+               pane: "tileFootprints",
 
-    if (!geometry) {
-        console.warn(
-            "Tile has no geometry:",
-            tile
-        );
+               interactive: true,
 
-        return null;
-    }
+               style: {
+                   color: "#0066ff",
+                   weight: 3,
+                   opacity: 1,
 
-    const layer = L.geoJSON(
-        geometry,
-        {
-            pane: "tileFootprints",
+                   fillColor: "#1683ff",
+                   fillOpacity: 0.28
+               }
+           }
+       );
 
-            style: {
-                color: "#0066ff",
-                weight: 2,
-                opacity: 1,
-                fillColor: "#3388ff",
-                fillOpacity: 0.25
-            }
-        }
-    );
 
-    layer.addTo(map);
+       layer.addTo(map);
 
-    layer.on(
-        "click",
-        function(event) {
-            L.DomEvent.stopPropagation(event);
 
-            selectTile(
-                tile,
-                index
-            );
-        }
-    );
+       /*
+        * Click tile.
+        */
+       layer.on(
+           "click",
+           function(event) {
 
-    tileLayers.set(
-        key,
-        layer
-    );
+               L.DomEvent.stopPropagation(
+                   event
+               );
 
-    return layer;
-}
+
+               console.log(
+                   "[swiss-copc] Tile selected:",
+                   key
+               );
+
+
+               selectTile(
+                   tile,
+                   index
+               );
+           }
+       );
+
+
+       /*
+        * Hover.
+        */
+       layer.on(
+           "mouseover",
+           function() {
+
+               if (
+                   selectedTileKey !== key
+               ) {
+
+                   layer.setStyle({
+                       color: "#00a8ff",
+                       weight: 4,
+                       fillColor: "#1683ff",
+                       fillOpacity: 0.40
+                   });
+               }
+
+
+               layer.bringToFront();
+           }
+       );
+
+
+       layer.on(
+           "mouseout",
+           function() {
+
+               if (
+                   selectedTileKey !== key
+               ) {
+
+                   layer.setStyle({
+                       color: "#0066ff",
+                       weight: 3,
+                       fillColor: "#1683ff",
+                       fillOpacity: 0.28
+                   });
+               }
+           }
+       );
+
+
+       /*
+        * Store layer so it can be selected/cleared later.
+        */
+       tileLayers.set(
+           key,
+           layer
+       );
+
+
+       return layer;
+   }
 
 /* ============================================================
    TILE LIST
@@ -757,44 +847,217 @@ function renderTileOnMap(tile, index) {
    SELECT TILE
    ============================================================ */
 
-   function selectTile(tile, index = 0) {
-       const key = tileKey(tile, index);
+   /* ============================================================
+      SELECTED TILE PANEL
+      ============================================================ */
 
-       // Reset previous selection
-       if (selectedTileKey && tileLayers.has(selectedTileKey)) {
-           const oldLayer = tileLayers.get(selectedTileKey);
+   function updateSelectedPanel(tile) {
+       const title =
+           getEl("selected-title");
 
-           oldLayer.setStyle({
-               weight: 2,
-               color: "#2563eb",
-               fillColor: "#3b82f6",
-               fillOpacity: 0.12
-           });
+       const info =
+           getEl("selected-info");
+
+       const attributes =
+           getEl("selected-attributes");
+
+
+       const tileName =
+           tile?.properties?.title ||
+           tile?.id ||
+           "Selected tile";
+
+
+       if (title) {
+           title.textContent =
+               tileName;
        }
 
-       selectedTileKey = key;
 
-       // Highlight new selection
-       const layer = tileLayers.get(key);
+       if (info) {
 
-       if (layer) {
-           layer.setStyle({
-               weight: 4,
-               color: "#f59e0b",
-               fillColor: "#f59e0b",
-               fillOpacity: 0.30
-           });
+           const bbox =
+               tile?.bbox;
 
-           layer.bringToFront();
+
+           if (
+               Array.isArray(bbox) &&
+               bbox.length >= 4
+           ) {
+
+               info.textContent =
+                   `BBOX: ${bbox[0].toFixed(5)}, ` +
+                   `${bbox[1].toFixed(5)} → ` +
+                   `${bbox[2].toFixed(5)}, ` +
+                   `${bbox[3].toFixed(5)}`;
+
+           } else {
+
+               info.textContent =
+                   "Tile selected.";
+           }
        }
 
-       currentTile = tile;
 
-       updateSelectedPanel(tile);
+       if (attributes) {
 
-       // Keep your existing loading behaviour
-       loadSelectedTile();
+           attributes.innerHTML = "";
+
+
+           const assets =
+               tile?.assets || {};
+
+
+           const assetEntries =
+               Object.entries(
+                   assets
+               );
+
+
+           if (
+               assetEntries.length === 0
+           ) {
+
+               attributes.textContent =
+                   "No asset information available.";
+
+               return;
+           }
+
+
+           for (
+               const [
+                   key,
+                   asset
+               ] of assetEntries
+           ) {
+
+               const row =
+                   document.createElement(
+                       "div"
+                   );
+
+
+               row.className =
+                   "attribute-item";
+
+
+               const href =
+                   asset?.href ||
+                   "";
+
+
+               const type =
+                   asset?.type ||
+                   "";
+
+
+               row.innerHTML =
+                   `<strong>${escapeHtml(key)}</strong>` +
+                   `<span>${escapeHtml(type)}</span>`;
+
+
+               if (href) {
+
+                   row.title =
+                       href;
+               }
+
+
+               attributes.appendChild(
+                   row
+               );
+           }
+       }
    }
+
+   function selectTile(tile, index = 0) {
+    const key =
+        tileKey(tile, index);
+
+
+    /*
+     * Reset previous tile.
+     */
+    if (
+        selectedTileKey &&
+        tileLayers.has(selectedTileKey)
+    ) {
+
+        const oldLayer =
+            tileLayers.get(
+                selectedTileKey
+            );
+
+
+        oldLayer.setStyle({
+            weight: 3,
+            color: "#0066ff",
+            fillColor: "#1683ff",
+            fillOpacity: 0.28
+        });
+    }
+
+
+    selectedTileKey =
+        key;
+
+
+    /*
+     * Highlight selected tile.
+     */
+    const layer =
+        tileLayers.get(key);
+
+
+    if (layer) {
+
+        layer.setStyle({
+            weight: 5,
+            color: "#ff8c00",
+            fillColor: "#ffb000",
+            fillOpacity: 0.38
+        });
+
+
+        layer.bringToFront();
+
+
+        /*
+         * Zoom to selected tile.
+         */
+        try {
+            map.fitBounds(
+                layer
+                    .getBounds()
+                    .pad(0.10)
+            );
+        } catch (error) {
+            console.warn(
+                "Could not zoom to tile:",
+                error
+            );
+        }
+    }
+
+
+    currentTile =
+        tile;
+
+
+    /*
+     * Update our custom tile panel.
+     */
+    updateSelectedPanel(
+        tile
+    );
+
+
+    /*
+     * Load COPC.
+     */
+    loadSelectedTile();
+}
 
 
 /* ============================================================

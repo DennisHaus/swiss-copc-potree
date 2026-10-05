@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_2");
+ setStatus("d_3");
 
 
 
@@ -2416,53 +2416,50 @@ function ensureSwissImageColorAttribute(
         );
     }
 
-    let color =
+    function ensureSwissImageColorAttribute(geometry, count) {
+    if (!geometry || !count) {
+        return null;
+    }
+
+    /*
+     * Potree 1.8 must already know about the attribute.
+     * Do NOT dynamically create geometry.attributes.color
+     * after the point cloud has been loaded.
+     */
+
+    const color =
         geometry.attributes?.color;
 
     if (
         color &&
         color.count === count &&
-        color.itemSize === 3 &&
-        color.array instanceof Uint8Array &&
-        color.normalized === true
+        color.itemSize === 3
     ) {
         return color;
     }
 
     /*
-     * Replace any incompatible old color/RGBA attribute.
+     * Potree may use RGBA for loaded point colors.
+     * If it exists, use that existing GPU-managed attribute.
      */
-    const array =
-        new Uint8Array(count * 3);
-
-    /*
-     * Neutral default until every point is sampled.
-     */
-    array.fill(128);
-
-    color =
-        new THREE.BufferAttribute(
-            array,
-            3,
-            true
-        );
+    const rgba =
+        geometry.attributes?.rgba;
 
     if (
-        typeof geometry.setAttribute ===
-        "function"
+        rgba &&
+        rgba.count === count &&
+        (rgba.itemSize === 3 ||
+         rgba.itemSize === 4)
     ) {
-        geometry.setAttribute(
-            "color",
-            color
-        );
-    } else {
-        geometry.attributes.color =
-            color;
+        return rgba;
     }
 
-    color.needsUpdate = true;
+    console.warn(
+        "[swiss-copc] No existing Potree RGB/RGBA attribute found.",
+        Object.keys(geometry.attributes || {})
+    );
 
-    return color;
+    return null;
 }
 
 /* ============================================================
@@ -2510,6 +2507,19 @@ async function colorGeometryFromSwissImage(
     /*
      * One RGB triplet per LiDAR point.
      */
+
+     console.log(
+     "[swiss-copc] Potree geometry attributes:",
+     Object.entries(geometry.attributes || {}).map(
+         ([name, attribute]) => ({
+             name,
+             count: attribute?.count,
+             itemSize: attribute?.itemSize,
+             type: attribute?.array?.constructor?.name
+         })
+     )
+ );
+
     const color =
         ensureSwissImageColorAttribute(
             geometry,

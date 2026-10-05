@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_19");
+ setStatus("d_20");
 
 
 
@@ -2612,15 +2612,38 @@ function yieldToBrowser() {
         });
     }
 
-               lv95[0] = worldX;
-               lv95[1] = worldY;
+    // LV95 -> WGS84 longitude/latitude -> Web Mercator.
+// The direct EPSG:2056 -> EPSG:3857 result in the log was inconsistent
+// with the WGS84 coordinates, so calculate Web Mercator explicitly here.
+const lonLat = proj4(
+"EPSG:2056",
+"EPSG:4326",
+[worldX, worldY]
+);
 
-               // LV95 -> Web Mercator.
-               const mercator = proj4(
-                   "EPSG:2056",
-                   "EPSG:3857",
-                   lv95
-               );
+const lonRad = lonLat[0] * Math.PI / 180;
+const latRad = lonLat[1] * Math.PI / 180;
+const earthRadius = 6378137;
+
+const mercator = [
+earthRadius * lonRad,
+earthRadius * Math.log(
+Math.tan(Math.PI / 4 + latRad / 2)
+)
+];
+
+if (i === 0) {
+console.log("[swiss-copc] verified raster coordinate", {
+lonLat,
+mercator,
+rasterExtent: {
+  minX: raster.worldMinX,
+  maxX: raster.worldMaxX,
+  minY: raster.worldMinY,
+  maxY: raster.worldMaxY
+}
+});
+}
 
                // Web Mercator -> raster pixel. Raster Y starts at the top.
                const ix = Math.floor(

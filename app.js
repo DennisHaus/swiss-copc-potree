@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("B_15");
+ setStatus("B_16");
 
  proj4.defs(
      "EPSG:2056",
@@ -3213,11 +3213,11 @@ function startSwissImageProcessing() {
     processSwissImageRGB();
 
 
-    SWISSIMAGE_RGB.processTimer =
-        window.setInterval(
-            processSwissImageRGB,
-            1500
-        );
+    //SWISSIMAGE_RGB.processTimer =
+      //  window.setInterval(
+        //    processSwissImageRGB,
+          //  1500
+        //);
 }
 
 async function processSwissImageRGB() {

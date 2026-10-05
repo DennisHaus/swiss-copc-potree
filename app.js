@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_4");
+ setStatus("d_5");
 
 
 
@@ -2396,48 +2396,48 @@ function yieldToBrowser() {
  */
 
  function ensureSwissImageColorAttribute(geometry, count) {
-     if (!geometry || !count) {
-         return null;
-     }
+    if (!geometry || !count) {
+        return null;
+    }
 
-     /*
-      * Potree 1.8 must already know about the attribute.
-      * Do NOT dynamically create geometry.attributes.color
-      * after the point cloud has been loaded.
-      */
+    const rgba = geometry.attributes?.rgba;
 
-     const color = geometry.attributes?.color;
+    if (!rgba || !rgba.array) {
+        console.warn(
+            "[swiss-copc] Potree geometry has no RGBA attribute.",
+            Object.keys(geometry.attributes || {})
+        );
 
-     if (
-         color &&
-         color.count === count &&
-         color.itemSize === 3
-     ) {
-         return color;
-     }
+        return null;
+    }
 
-     /*
-      * Potree may use RGBA for loaded point colors.
-      * If it exists, use that existing GPU-managed attribute.
-      */
-     const rgba = geometry.attributes?.rgba;
+    /*
+     * IMPORTANT:
+     *
+     * Do not create or replace the attribute here.
+     * Potree 1.8 has already created the GPU buffer for
+     * the existing "rgba" attribute.
+     *
+     * We will modify its existing Uint8Array in-place.
+     */
 
-     if (
-         rgba &&
-         rgba.count === count &&
-         (rgba.itemSize === 3 ||
-             rgba.itemSize === 4)
-     ) {
-         return rgba;
-     }
+    const requiredBytes = count * 4;
 
-     console.warn(
-         "[swiss-copc] No existing Potree RGB/RGBA attribute found.",
-         Object.keys(geometry.attributes || {})
-     );
+    if (rgba.array.length < requiredBytes) {
+        console.warn(
+            "[swiss-copc] Existing RGBA buffer is too small.",
+            {
+                points: count,
+                availableBytes: rgba.array.length,
+                requiredBytes: requiredBytes
+            }
+        );
 
-     return null;
- }
+        return null;
+    }
+
+    return rgba;
+}
 
 /* ============================================================
    COLOR ONE POTREE GEOMETRY
@@ -2655,37 +2655,40 @@ async function colorGeometryFromSwissImage(
                     scaleY
                 );
 
-            const c =
-                i * 3;
+                const c =
+        i * 4;
 
-            if (
-                ix < 0 ||
-                iy < 0 ||
-                ix >= raster.width ||
-                iy >= raster.height
-            ) {
-                colors[c] = 128;
-                colors[c + 1] = 128;
-                colors[c + 2] = 128;
-                continue;
-            }
+    if (
+        ix < 0 ||
+        iy < 0 ||
+        ix >= raster.width ||
+        iy >= raster.height
+    ) {
+        colors[c] = 128;
+        colors[c + 1] = 128;
+        colors[c + 2] = 128;
+        colors[c + 3] = 255;
+        continue;
+    }
 
-            const rgb =
-                getSwissImagePixel(
-                    raster,
-                    ix,
-                    iy
-                );
+    const rgb =
+        getSwissImagePixel(
+            raster,
+            ix,
+            iy
+        );
 
-            colors[c] =
-                rgb[0];
+    colors[c] =
+        rgb[0];
 
-            colors[c + 1] =
-                rgb[1];
+    colors[c + 1] =
+        rgb[1];
 
-            colors[c + 2] =
-                rgb[2];
-        }
+    colors[c + 2] =
+        rgb[2];
+
+    colors[c + 3] =
+        255;
 
         onProgress(end);
 

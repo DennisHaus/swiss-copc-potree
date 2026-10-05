@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_30");
+ setStatus("d_31");
 
 
 
@@ -874,19 +874,7 @@ function applyColorMode(pointcloud, mode) {
     const material = pointcloud.material;
 
     if (mode === "swissimage") {
-        material.activeAttributeName = null;
-
-        const ok = setPointColorType(
-            material,
-            "RGB"
-        );
-
-        if (!ok) {
-            setStatus(
-                "Potree RGB color mode is unavailable."
-            );
-            return;
-        }
+        material.activeAttributeName = "rgba";
 
         refreshPointCloudMaterial(pointcloud);
         updateDisplayedColorMode("swissimage");

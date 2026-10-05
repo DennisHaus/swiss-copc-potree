@@ -188,7 +188,7 @@ const swissImage = L.tileLayer(
 );
 
 // Default
-swissTopo.addTo(map);
+swissTopoGrey.addTo(map);
 
 // Small layer switcher
 L.control.layers(
@@ -361,93 +361,122 @@ function initUI() {
    STAC TILE SEARCH
    ============================================================ */
 
-async function findTilesFromMap() {
-    if (!map) {
-        setStatus(
-            "Map is not available."
-        );
+   async function findTilesFromMap() {
+       if (!map) {
+           setStatus("Map is not available.");
+           return;
+       }
 
-        return;
-    }
+       const bounds = map.getBounds();
 
-    const bounds =
-        map.getBounds();
+       const bbox = [
+           bounds.getWest(),
+           bounds.getSouth(),
+           bounds.getEast(),
+           bounds.getNorth()
+       ];
 
-    const bbox = [
-        bounds.getWest(),
-        bounds.getSouth(),
-        bounds.getEast(),
-        bounds.getNorth()
-    ];
+       console.log("=== STAC TILE SEARCH ===");
+       console.log("Map bounds:", bounds);
+       console.log("BBOX:", bbox);
 
-    setStatus(
-        "Searching swissSURFACE3D tiles…"
-    );
+       setStatus("Searching swissSURFACE3D tiles…");
 
-    try {
-        const url = new URL(
-            `${CONFIG.STAC_ROOT}/search`
-        );
+       try {
+           const url = new URL(
+               `${CONFIG.STAC_ROOT}/search`
+           );
 
-        url.searchParams.set(
-            "collections",
-            CONFIG.COLLECTION
-        );
+           url.searchParams.set(
+               "collections",
+               CONFIG.COLLECTION
+           );
 
-        url.searchParams.set(
-            "bbox",
-            bbox.join(",")
-        );
+           url.searchParams.set(
+               "bbox",
+               bbox.join(",")
+           );
 
-        url.searchParams.set(
-    "limit",
-    Math.min(CONFIG.MAX_TILES || 100, 100)
-);
+           // STAC API maximum is 100
+           url.searchParams.set(
+               "limit",
+               "100"
+           );
 
-        const response =
-            await fetch(url);
+           console.log("STAC URL:", url.toString());
 
-        if (!response.ok) {
-            throw new Error(
-                `STAC request failed: ${response.status}`
-            );
-        }
+           const response = await fetch(url);
 
-        const data =
-            await response.json();
+           console.log(
+               "STAC response:",
+               response.status,
+               response.statusText
+           );
 
-        currentTiles =
-            Array.isArray(
-                data.features
-            )
-                ? data.features
-                : [];
+           if (!response.ok) {
+               const text = await response.text();
 
-                console.log(
-    "STAC returned:",
-    currentTiles.length,
-    "tiles"
-);
+               console.error(
+                   "STAC error response:",
+                   text
+               );
 
-console.log(
-    "First tile:",
-    currentTiles[0]
-);
+               throw new Error(
+                   `STAC request failed: ${response.status}`
+               );
+           }
 
-        renderTiles();
+           const data = await response.json();
 
-        setStatus(
-            `${currentTiles.length} tile(s) found.`
-        );
+           console.log("STAC response:", data);
+           console.log(
+               "STAC features:",
+               data.features
+           );
 
-    } catch (error) {
-        console.error(error);
+           currentTiles = Array.isArray(data.features)
+               ? data.features
+               : [];
 
-        setStatus(
-            `Tile search failed: ${error.message}`
-        );
-    }
-}
+           console.log(
+               "NUMBER OF TILES:",
+               currentTiles.length
+           );
+
+           if (currentTiles.length > 0) {
+               console.log(
+                   "FIRST TILE:",
+                   currentTiles[0]
+               );
+
+               console.log(
+                   "FIRST TILE GEOMETRY:",
+                   currentTiles[0].geometry
+               );
+
+               console.log(
+                   "FIRST TILE BBOX:",
+                   currentTiles[0].bbox
+               );
+           }
+
+           renderTiles();
+
+           setStatus(
+               `${currentTiles.length} tile(s) found.`
+           );
+
+       } catch (error) {
+           console.error(
+               "Tile search failed:",
+               error
+           );
+
+           setStatus(
+               `Tile search failed: ${error.message}`
+           );
+       }
+   }
 
 
 /* ============================================================
@@ -455,57 +484,64 @@ console.log(
    ============================================================ */
 
    function renderTiles() {
-       const list = getEl("tile-list");
-       const count = getEl("tile-count");
+    const list = getEl("tile-list");
+    const count = getEl("tile-count");
 
-       if (list) {
-           list.innerHTML = "";
-       }
+    if (list) {
+        list.innerHTML = "";
+    }
 
-       if (count) {
-           count.textContent = String(currentTiles.length);
-       }
+    if (count) {
+        count.textContent =
+            String(currentTiles.length);
+    }
 
-       // Remove old map footprints
-       for (const layer of tileLayers.values()) {
-           try {
-               map.removeLayer(layer);
-           } catch (error) {
-               console.warn(error);
-           }
-       }
+    // Remove previous footprints
+    for (const layer of tileLayers.values()) {
+        if (map.hasLayer(layer)) {
+            map.removeLayer(layer);
+        }
+    }
 
-       tileLayers.clear();
-       selectedTileKey = null;
+    tileLayers.clear();
+    selectedTileKey = null;
 
-       // Render new tiles
-       currentTiles.forEach((tile, index) => {
-           renderTileOnMap(tile, index);
-           renderTileInList(tile, index);
-       });
+    if (!currentTiles.length) {
+        console.warn(
+            "No STAC tiles returned."
+        );
 
-       // IMPORTANT:
-       // Zoom the map to the returned tile footprints.
-       if (tileLayers.size > 0) {
-           const layers = Array.from(tileLayers.values());
+        return;
+    }
 
-           const group = L.featureGroup(layers);
+    const footprintLayers = [];
 
-           const bounds = group.getBounds();
+    currentTiles.forEach((tile, index) => {
+        const layer =
+            renderTileOnMap(tile, index);
 
-           if (bounds.isValid()) {
-               map.fitBounds(bounds, {
-                   padding: [30, 30],
-                   maxZoom: 15
-               });
-           }
-       }
+        if (layer) {
+            footprintLayers.push(layer);
+        }
 
-       console.log(
-           "Rendered tile footprints:",
-           tileLayers.size
-       );
-   }
+        renderTileInList(tile, index);
+    });
+
+    console.log(
+        "Rendered footprint layers:",
+        footprintLayers.length
+    );
+
+    // Zoom to the returned tiles
+    if (footprintLayers.length > 0) {
+        const group =
+            L.featureGroup(footprintLayers);
+
+        map.fitBounds(
+            group.getBounds().pad(0.05)
+        );
+    }
+}
 
 /* ============================================================
    TILE FOOTPRINT ON MAP
@@ -628,92 +664,58 @@ function geometryFromTile(tile) {
     return null;
 }
 
-
 function renderTileOnMap(tile, index) {
-
     const geometry = geometryFromTile(tile);
+
+    const key = tileKey(tile, index);
+
+    console.log(
+        "Rendering tile:",
+        key
+    );
+
+    console.log(
+        "Geometry:",
+        geometry
+    );
 
     if (!geometry) {
         console.warn(
-            "Tile has no geometry or bbox:",
+            "Tile has no geometry:",
             tile
         );
 
         return null;
     }
 
-    const key = tileKey(tile, index);
-
-    console.log(
-        "Adding tile to map:",
-        key,
-        geometry
-    );
-
     const layer = L.geoJSON(
         geometry,
         {
             pane: "tileFootprints",
 
-            interactive: true,
-
             style: {
-                color: "#2563eb",
+                color: "#0066ff",
                 weight: 2,
                 opacity: 1,
-
-                fillColor: "#3b82f6",
-                fillOpacity: 0.28
+                fillColor: "#3388ff",
+                fillOpacity: 0.25
             }
         }
     );
 
     layer.addTo(map);
 
-    layer.on("click", event => {
+    layer.on(
+        "click",
+        function(event) {
+            L.DomEvent.stopPropagation(event);
 
-        L.DomEvent.stopPropagation(event);
-
-        console.log(
-            "TILE CLICKED:",
-            key
-        );
-
-        selectTile(
-            tile,
-            index
-        );
-    });
-
-    layer.on("mouseover", () => {
-
-        if (
-            selectedTileKey !== key
-        ) {
-            layer.setStyle({
-                color: "#60a5fa",
-                weight: 3,
-                fillColor: "#60a5fa",
-                fillOpacity: 0.40
-            });
+            selectTile(
+                tile,
+                index
+            );
         }
-
-        layer.bringToFront();
-    });
-
-    layer.on("mouseout", () => {
-
-        if (
-            selectedTileKey !== key
-        ) {
-            layer.setStyle({
-                color: "#2563eb",
-                weight: 2,
-                fillColor: "#3b82f6",
-                fillOpacity: 0.28
-            });
-        }
-    });
+    );
 
     tileLayers.set(
         key,
@@ -722,7 +724,6 @@ function renderTileOnMap(tile, index) {
 
     return layer;
 }
-
 
 /* ============================================================
    TILE LIST

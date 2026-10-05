@@ -20,7 +20,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("A_7");
+ setStatus("B_7");
 
 
 
@@ -339,22 +339,22 @@ function initUI() {
         getEl("color-mode");
 
     const horizontalButton =
-        getEl("horizontalSectionButton");
+        getEl("horizontal-section-button");
 
     const verticalButton =
-        getEl("verticalSectionButton");
+        getEl("vertical-section-button");
 
     const clearSectionButton =
-        getEl("clearSectionButton");
+        getEl("clear-section-button");
 
     const loadButton =
-        getEl("loadButton");
+        getEl("load-button");
 
     const unloadButton =
-        getEl("unloadButton");
+        getEl("unload-button");
 
     const downloadButton =
-        getEl("downloadButton");
+        getEl("download-button");
 
 
     if (findButton) {
@@ -496,13 +496,13 @@ function initUI() {
    ============================================================ */
 
    function updateControlState() {
-       const loadButton = getEl("loadButton");
-       const unloadButton = getEl("unloadButton");
-       const downloadButton = getEl("downloadButton");
+       const loadButton = getEl("load-button");
+       const unloadButton = getEl("unload-button");
+       const downloadButton = getEl("download-button");
 
-       const horizontalButton = getEl("horizontalSectionButton");
-       const verticalButton = getEl("verticalSectionButton");
-       const clearSectionButton = getEl("clearSectionButton");
+       const horizontalButton = getEl("horizontal-section-button");
+       const verticalButton = getEl("vertical-section-button");
+       const clearSectionButton = getEl("clear-section-button");
 
        const colorMode = getEl("color-mode");
 

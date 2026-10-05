@@ -9,7 +9,7 @@
  * Potree uses jQuery's "$()" internally.
  */
 
- setStatus("v3");
+ setStatus("v4");
 
 
 /* ============================================================
@@ -641,188 +641,31 @@ console.log("First geometry:", data.features?.[0]?.geometry);
     * [west, south, east, north]
     */
 
-   function geometryFromTile(tile) {
-       if (
-           Array.isArray(tile.bbox) &&
-           tile.bbox.length >= 4
-       ) {
-           const [
-               west,
-               south,
-               east,
-               north
-           ] = tile.bbox;
 
-           return {
-               type: "Polygon",
+    function geometryFromTile(tile) {
+        // STAC bbox is WGS84 and is the safest footprint to draw.
+        if (Array.isArray(tile.bbox) && tile.bbox.length >= 4) {
+            const [west, south, east, north] = tile.bbox;
 
-               coordinates: [[
-                   [west, south],
-                   [east, south],
-                   [east, north],
-                   [west, north],
-                   [west, south]
-               ]]
-           };
-       }
+            return {
+                type: "Polygon",
+                coordinates: [[
+                    [west, south],
+                    [east, south],
+                    [east, north],
+                    [west, north],
+                    [west, south]
+                ]]
+            };
+        }
 
+        // Fallback to GeoJSON geometry.
+        if (tile.geometry) {
+            return tile.geometry;
+        }
 
-       /*
-        * Only use the STAC geometry if there is no bbox.
-        */
-       if (tile.geometry) {
-           return tile.geometry;
-       }
-
-
-       if (tile.properties?.geometry) {
-           return tile.properties.geometry;
-       }
-
-
-       return null;
-   }
-
-   function renderTileOnMap(tile, index) {
-       const geometry =
-           geometryFromTile(tile);
-
-       const key =
-           tileKey(tile, index);
-
-
-       console.log(
-           "[swiss-copc] Rendering tile:",
-           key
-       );
-
-       console.log(
-           "[swiss-copc] Tile bbox:",
-           tile.bbox
-       );
-
-       console.log(
-           "[swiss-copc] Footprint geometry:",
-           geometry
-       );
-
-
-       if (!geometry) {
-           console.warn(
-               "[swiss-copc] Tile has no bbox or geometry:",
-               tile
-           );
-
-           return null;
-       }
-
-
-       /*
-        * Bright blue tile footprint.
-        */
-       const layer = L.geoJSON(
-           geometry,
-           {
-               pane: "tileFootprints",
-
-               interactive: true,
-
-               style: {
-                   color: "#0066ff",
-                   weight: 3,
-                   opacity: 1,
-
-                   fillColor: "#1683ff",
-                   fillOpacity: 0.28
-               }
-           }
-       );
-
-
-       layer.addTo(map);
-
-
-       /*
-        * Click tile.
-        */
-       layer.on(
-           "click",
-           function(event) {
-
-               L.DomEvent.stopPropagation(
-                   event
-               );
-
-
-               console.log(
-                   "[swiss-copc] Tile selected:",
-                   key
-               );
-
-
-               selectTile(
-                   tile,
-                   index
-               );
-           }
-       );
-
-
-       /*
-        * Hover.
-        */
-       layer.on(
-           "mouseover",
-           function() {
-
-               if (
-                   selectedTileKey !== key
-               ) {
-
-                   layer.setStyle({
-                       color: "#00a8ff",
-                       weight: 4,
-                       fillColor: "#1683ff",
-                       fillOpacity: 0.40
-                   });
-               }
-
-
-               layer.bringToFront();
-           }
-       );
-
-
-       layer.on(
-           "mouseout",
-           function() {
-
-               if (
-                   selectedTileKey !== key
-               ) {
-
-                   layer.setStyle({
-                       color: "#0066ff",
-                       weight: 3,
-                       fillColor: "#1683ff",
-                       fillOpacity: 0.28
-                   });
-               }
-           }
-       );
-
-
-       /*
-        * Store layer so it can be selected/cleared later.
-        */
-       tileLayers.set(
-           key,
-           layer
-       );
-
-
-       return layer;
-   }
+        return null;
+    }
 
 /* ============================================================
    TILE LIST

@@ -18,7 +18,7 @@ code = "use strict";
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
- setStatus("d_15");
+ setStatus("d_16");
 
 
 
@@ -2688,6 +2688,8 @@ console.log("[swiss-copc] sampling transform", {
                     "EPSG:3857",
                     lv95
                 );
+
+
 
 
             /*

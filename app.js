@@ -137,7 +137,6 @@ function initPotree() {
         );
     }
 }
-
 // ------------------------------------------------------------
 // Leaflet map
 // ------------------------------------------------------------
@@ -146,15 +145,64 @@ map = L.map("map", {
     zoomControl: true,
     attributionControl: true,
     preferCanvas: true
-}).setView(CONFIG.MAP_CENTER, CONFIG.MAP_ZOOM);
+}).setView(
+    CONFIG.MAP_CENTER,
+    CONFIG.MAP_ZOOM
+);
 
-// Dedicated panes so tile footprints are always clickable.
+// ------------------------------------------------------------
+// Basemaps
+// ------------------------------------------------------------
+
+const swissTopo = L.tileLayer(
+    "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg",
+    {
+        maxZoom: 20,
+        attribution: "© swisstopo"
+    }
+);
+
+const swissTopoGrey = L.tileLayer(
+    "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-grau/default/current/3857/{z}/{x}/{y}.jpeg",
+    {
+        maxZoom: 20,
+        attribution: "© swisstopo"
+    }
+);
+
+const swissImage = L.tileLayer(
+    "https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swissimage-product/default/current/3857/{z}/{x}/{y}.jpeg",
+    {
+        maxZoom: 20,
+        attribution: "© swisstopo"
+    }
+);
+
+// Start with grey
+swissTopoGrey.addTo(map);
+
+L.control.layers(
+    {
+        "SwissTopo": swissTopo,
+        "SwissTopo grey": swissTopoGrey,
+        "SWISSIMAGE": swissImage
+    },
+    null,
+    {
+        collapsed: true,
+        position: "topright"
+    }
+).addTo(map);
+
+// ------------------------------------------------------------
+// Tile footprint panes
+// ------------------------------------------------------------
+
 map.createPane("tileFootprints");
 map.getPane("tileFootprints").style.zIndex = 650;
 
 map.createPane("tileHighlight");
 map.getPane("tileHighlight").style.zIndex = 660;
-
 // ------------------------------------------------------------
 // SwissTopo basemaps
 // ------------------------------------------------------------
@@ -518,71 +566,155 @@ function renderTiles() {
        return null;
    }
 
-   function renderTileOnMap(tile, index) {
-       const geometry = geometryFromTile(tile);
-
-       if (!geometry) {
-           return null;
-       }
-
-       const key = tileKey(tile, index);
-
-       const layer = L.geoJSON(geometry, {
-           pane: "tileFootprints",
-
-           interactive: true,
-
-           style: {
-               color: "#2563eb",
-               weight: 2,
-               opacity: 0.9,
-
-               // Important:
-               // a filled polygon gives us a large clickable target.
-               fill: true,
-               fillColor: "#3b82f6",
-               fillOpacity: 0.12
-           }
-       });
-
-       layer.addTo(map);
-
-       layer.on("click", function (event) {
-           L.DomEvent.stopPropagation(event);
-
-           selectTile(tile, index);
-       });
-
-       layer.on("mouseover", function () {
-           if (selectedTileKey !== key) {
-               layer.setStyle({
-                   weight: 3,
-                   color: "#60a5fa",
-                   fillColor: "#60a5fa",
-                   fillOpacity: 0.22
-               });
-           }
-
-           layer.bringToFront();
-       });
-
-       layer.on("mouseout", function () {
-           if (selectedTileKey !== key) {
-               layer.setStyle({
-                   weight: 2,
-                   color: "#2563eb",
-                   fillColor: "#3b82f6",
-                   fillOpacity: 0.12
-               });
-           }
-       });
-
-       tileLayers.set(key, layer);
-
-       return layer;
-   }
+   function tileKey(tile, index) {
+    return (
+        tile.id ||
+        tile.properties?.id ||
+        tile.properties?.title ||
+        tile.properties?.name ||
+        `tile-${index}`
+    );
+}
 
 
+function geometryFromTile(tile) {
+
+    // Normal STAC geometry
+    if (tile.geometry) {
+        return tile.geometry;
+    }
+
+    // Some responses may put geometry in properties
+    if (tile.properties?.geometry) {
+        return tile.properties.geometry;
+    }
+
+    // STAC bbox fallback
+    if (
+        Array.isArray(tile.bbox) &&
+        tile.bbox.length >= 4
+    ) {
+        const [
+            west,
+            south,
+            east,
+            north
+        ] = tile.bbox;
+
+        return {
+            type: "Polygon",
+            coordinates: [[
+                [west, south],
+                [east, south],
+                [east, north],
+                [west, north],
+                [west, south]
+            ]]
+        };
+    }
+
+    return null;
+}
+
+
+function renderTileOnMap(tile, index) {
+
+    const geometry = geometryFromTile(tile);
+
+    if (!geometry) {
+        console.warn(
+            "Tile has no usable geometry:",
+            tile
+        );
+
+        return null;
+    }
+
+    const key = tileKey(tile, index);
+
+    console.log(
+        "Rendering tile footprint:",
+        key,
+        geometry
+    );
+
+    console.log(
+    "CURRENT TILES:",
+    currentTiles
+);
+
+console.log(
+    "NUMBER OF TILES:",
+    currentTiles.length
+);
+
+    const layer = L.geoJSON(
+        geometry,
+        {
+            pane: "tileFootprints",
+
+            interactive: true,
+
+            style: {
+                color: "#2563eb",
+                weight: 2,
+                opacity: 1,
+
+                fillColor: "#3b82f6",
+                fillOpacity: 0.25
+            }
+        }
+    );
+
+    layer.addTo(map);
+
+    layer.on("click", function(event) {
+
+        L.DomEvent.stopPropagation(event);
+
+        console.log(
+            "Tile clicked:",
+            key
+        );
+
+        selectTile(tile, index);
+    });
+
+    layer.on("mouseover", function() {
+
+        if (selectedTileKey !== key) {
+
+            layer.setStyle({
+                color: "#60a5fa",
+                weight: 3,
+                fillColor: "#60a5fa",
+                fillOpacity: 0.35
+            });
+        }
+
+        layer.bringToFront();
+    });
+
+    layer.on("mouseout", function() {
+
+        if (selectedTileKey !== key) {
+
+            layer.setStyle({
+                color: "#2563eb",
+                weight: 2,
+                fillColor: "#3b82f6",
+                fillOpacity: 0.25
+            });
+        }
+    });
+
+    tileLayers.set(
+        key,
+        layer
+    );
+
+    return layer;
+}
 /* ============================================================
    TILE LIST
    ============================================================ */

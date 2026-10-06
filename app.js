@@ -718,11 +718,14 @@ function getCopcUrl(tile) {
         }
     }
 
-    for (const asset of Object.values(tile.assets)) {
-        const href = asset?.href || "";
+    // no COPC: plain LAZ first, then the older .las.zip / .las deliveries
+    for (const pattern of [/\.laz($|\?)/i, /\.las(\.zip)?($|\?)/i]) {
+        for (const asset of Object.values(tile.assets)) {
+            const href = asset?.href || "";
 
-        if (/\.laz($|\?)/i.test(href)) {
-            return href;
+            if (pattern.test(href)) {
+                return href;
+            }
         }
     }
 

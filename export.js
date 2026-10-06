@@ -741,17 +741,19 @@
             : null;
 
         let buffer = open?.userData.lazBuffer;
-        let header = open?.userData.lazHeader;
 
         if (!buffer) {
-            setStatus("Downloading LAZ…");
+            setStatus("Downloading…");
             buffer = await lib.fetchBuffer(
                 url,
-                (got, total) => showSwissImageProgress(got, total, "Downloading LAZ…")
+                (got, total) => showSwissImageProgress(got, total, "Downloading…")
             );
             hideSwissImageProgress();
-            header = lib.parseLasHeader(buffer);
         }
+
+        // LAZ, plain LAS, or LAS/LAZ inside a ZIP
+        const source = await lib.openPointSource(buffer);
+        const header = source.header;
 
         const cube = [...header.min, ...header.max];
         const filter = kind === "section"
@@ -783,10 +785,10 @@
 
         const label = kind === "section" ? "Exporting section…" : "Exporting tile…";
 
-        await lib.decodeLaz(buffer, header, async (u, base, count, first) => {
+        await source.run(async (u, base, count, first) => {
             if (abortRequested) throw new Error("Export cancelled.");
 
-            const dv = new DataView(u.buffer);
+            const dv = new DataView(u.buffer, u.byteOffset, u.byteLength);
 
             for (let k = 0; k < count; k++) {
                 const p = base + k * rec;

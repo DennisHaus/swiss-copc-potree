@@ -22,9 +22,9 @@
 (function () {
     "use strict";
 
-    const MAX_POINTS = 100e6;
+    const MAX_POINTS = 60e6;
     const CHUNK = 65536;
-    const DEFAULT_LAZ_PERF_BASE = "https://cdn.jsdelivr.net/npm/laz-perf@0.0.6/lib/web/";
+    const DEFAULT_LAZ_PERF_BASE = "https://cdn.jsdelivr.net/npm/laz-perf@0.0.7/lib/web/";
 
     const setAttr = (geometry, name, attribute) =>
         typeof geometry.setAttribute === "function"
@@ -106,6 +106,7 @@
 
         return {
             versionMinor: minor,
+            offsetToPoints: v.getUint32(96, true),
             format: v.getUint8(104) & 0x3f,
             compressed: (v.getUint8(104) & 0x80) !== 0,
             recordLength: v.getUint16(105, true),
@@ -125,6 +126,42 @@
 
     const hasZip = m => !!(m && m.LASZip && m._malloc);
 
+    /*
+     * laz-perf's web build (lib/web/laz-perf.js) is an Emscripten module
+     * factory, NOT an ES module (its index.js is CommonJS). So it can neither
+     * be import()ed nor required in the browser; it has to run as a classic
+     * script, or be evaluated with a small module/exports shim.
+     */
+    function factoryFromSource(code) {
+        const shim = { exports: {} };
+        const run = new Function(
+            "module", "exports", "define", "require",
+            `${code}\n;return typeof createLazPerf !== "undefined" ? createLazPerf : undefined;`
+        );
+
+        const result = run(shim, shim.exports, undefined, undefined);
+        const exported = shim.exports;
+
+        return (
+            (typeof result === "function" && result) ||
+            (typeof exported === "function" && exported) ||
+            exported?.createLazPerf ||
+            exported?.default ||
+            null
+        );
+    }
+
+    function loadClassicScript(url) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = url;
+            script.async = true;
+            script.onload = resolve;
+            script.onerror = () => reject(new Error(`could not load ${url}`));
+            document.head.appendChild(script);
+        });
+    }
+
     function getLazPerf() {
         if (lazPerfPromise) {
             return lazPerfPromise;
@@ -133,51 +170,78 @@
         lazPerfPromise = (async () => {
             const base = (window.CONFIG && CONFIG.LAZ_PERF_BASE) || DEFAULT_LAZ_PERF_BASE;
             const locateFile = name => base + name;
+            const problems = [];
 
+            const tryFactory = async (factory, label) => {
+                for (const options of [{ locateFile }, undefined]) {
+                    try {
+                        const module = await factory(options);
+                        if (hasZip(module)) return module;
+                        problems.push(`${label}: module has no LASZip/_malloc`);
+                    } catch (error) {
+                        problems.push(`${label}: ${error.message || error}`);
+                    }
+                }
+                return null;
+            };
+
+            // 1. a decoder the page already provides
             if (hasZip(window.Module)) {
                 return window.Module;
             }
 
-            const factories = () => [
+            const existing = [
                 window.createLazPerf,
                 window.LazPerf?.createLazPerf,
                 window.LazPerf?.create,
                 typeof window.LazPerf === "function" ? window.LazPerf : null
             ].filter(Boolean);
 
-            const tryFactory = async factory => {
-                for (const options of [undefined, { locateFile }]) {
-                    try {
-                        const module = await factory(options);
-                        if (hasZip(module)) return module;
-                    } catch (error) {
-                        console.warn("[laz] decoder factory failed:", error);
-                    }
-                }
-                return null;
-            };
-
-            for (const factory of factories()) {
-                const module = await tryFactory(factory);
+            for (const factory of existing) {
+                const module = await tryFactory(factory, "page decoder");
                 if (module) return module;
             }
 
-            // fall back to a CDN copy
+            // 2. laz-perf as a classic script (defines window.createLazPerf)
             try {
-                const imported = await import(base + "laz-perf.js");
-                const factory = imported.createLazPerf || imported.default || window.createLazPerf;
+                await loadClassicScript(base + "laz-perf.js");
 
-                if (typeof factory === "function") {
-                    const module = await tryFactory(factory);
+                if (typeof window.createLazPerf === "function") {
+                    const module = await tryFactory(window.createLazPerf, "script tag");
                     if (module) return module;
+                } else {
+                    problems.push("script tag: laz-perf.js did not define createLazPerf");
                 }
             } catch (error) {
-                console.warn("[laz] could not load laz-perf from", base, error);
+                problems.push(`script tag: ${error.message}`);
             }
 
+            // 3. download the source and evaluate it with a module shim
+            try {
+                const response = await fetch(base + "laz-perf.js");
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                const factory = factoryFromSource(await response.text());
+
+                if (factory) {
+                    const module = await tryFactory(factory, "evaluated source");
+                    if (module) return module;
+                } else {
+                    problems.push("evaluated source: no factory found");
+                }
+            } catch (error) {
+                problems.push(`evaluated source: ${error.message}`);
+            }
+
+            console.warn("[laz] decoder problems:", problems);
+
             throw new Error(
-                "No LAZ decoder (laz-perf) available. Load laz-perf in index.html " +
-                "or set CONFIG.LAZ_PERF_BASE."
+                "LAZ decoder (laz-perf) could not be loaded from " + base +
+                ". Details: " + (problems.slice(-2).join("; ") || "none") +
+                ". Host laz-perf's lib/web folder yourself and set CONFIG.LAZ_PERF_BASE."
             );
         })();
 
@@ -224,6 +288,257 @@
             module._free(filePtr);
             module._free(chunkPtr);
         }
+    }
+
+    /* ============================================================
+       Point sources: LAZ, plain LAS, and LAS/LAZ inside a ZIP
+
+       Older swissSURFACE3D tiles are only offered as .las.zip. The ZIP is
+       read directly (central directory) and the LAS inside is inflated as a
+       stream with the browser's DecompressionStream, so the uncompressed
+       file (hundreds of MB) never has to sit in memory as a whole.
+
+       Every source offers  { header, kind, run(onChunk, onProgress) }  and
+       calls onChunk(bytes, basePointer, count, firstIndex) with raw point
+       records, like decodeLaz does.
+       ============================================================ */
+
+    function findZipEntry(buffer) {
+        const v = new DataView(buffer);
+        const bytes = new Uint8Array(buffer);
+
+        let eocd = -1;
+
+        for (let i = buffer.byteLength - 22; i >= Math.max(0, buffer.byteLength - 65557); i--) {
+            if (v.getUint32(i, true) === 0x06054b50) {
+                eocd = i;
+                break;
+            }
+        }
+
+        if (eocd < 0) {
+            throw new Error("ZIP: end-of-archive record not found (damaged download?).");
+        }
+
+        const count = v.getUint16(eocd + 10, true);
+        let p = v.getUint32(eocd + 16, true);
+
+        if (count === 0xffff || p === 0xffffffff) {
+            throw new Error("ZIP64 archives are not supported.");
+        }
+
+        const decoder = new TextDecoder();
+        let found = null;
+
+        for (let i = 0; i < count; i++) {
+            if (v.getUint32(p, true) !== 0x02014b50) break;
+
+            const nameLength = v.getUint16(p + 28, true);
+            const extraLength = v.getUint16(p + 30, true);
+            const commentLength = v.getUint16(p + 32, true);
+            const name = decoder.decode(bytes.subarray(p + 46, p + 46 + nameLength));
+
+            if (/\.(las|laz)$/i.test(name) && !/(^|\/)__MACOSX\//.test(name)) {
+                const entry = {
+                    name,
+                    method: v.getUint16(p + 10, true),
+                    compressedSize: v.getUint32(p + 20, true),
+                    size: v.getUint32(p + 24, true),
+                    headerOffset: v.getUint32(p + 42, true)
+                };
+
+                if (!found || /\.las$/i.test(name)) found = entry;
+                if (/\.las$/i.test(name)) break;
+            }
+
+            p += 46 + nameLength + extraLength + commentLength;
+        }
+
+        if (!found) {
+            throw new Error("No .las or .laz file found inside the ZIP.");
+        }
+
+        if (found.compressedSize === 0xffffffff || found.size === 0xffffffff) {
+            throw new Error("ZIP64 entries are not supported.");
+        }
+
+        const nameLength = v.getUint16(found.headerOffset + 26, true);
+        const extraLength = v.getUint16(found.headerOffset + 28, true);
+
+        found.dataStart = found.headerOffset + 30 + nameLength + extraLength;
+
+        return found;
+    }
+
+    /* Stream of the (inflated) bytes of one ZIP entry. */
+    function entryStream(buffer, entry) {
+        const data = new Uint8Array(buffer, entry.dataStart, entry.compressedSize);
+        let position = 0;
+
+        const raw = new ReadableStream({
+            pull(controller) {
+                if (position >= data.length) {
+                    controller.close();
+                    return;
+                }
+
+                controller.enqueue(data.subarray(position, position + (1 << 20)));
+                position += 1 << 20;
+            }
+        });
+
+        if (entry.method === 0) {
+            return raw;
+        }
+
+        if (entry.method !== 8) {
+            throw new Error(`Unsupported ZIP compression method ${entry.method}.`);
+        }
+
+        if (typeof DecompressionStream === "undefined") {
+            throw new Error(
+                "This browser cannot unpack ZIP files (DecompressionStream missing). " +
+                "Use a current Chrome, Edge, Firefox or Safari."
+            );
+        }
+
+        return raw.pipeThrough(new DecompressionStream("deflate-raw"));
+    }
+
+    /* Exact-size reads from a stream. */
+    function byteReader(stream) {
+        const reader = stream.getReader();
+        const queue = [];
+        let queued = 0;
+        let finished = false;
+
+        return {
+            async pull(n) {
+                while (queued < n && !finished) {
+                    const result = await reader.read();
+
+                    if (result.done) {
+                        finished = true;
+                        break;
+                    }
+
+                    queue.push(result.value);
+                    queued += result.value.length;
+                }
+
+                const take = Math.min(n, queued);
+                const out = new Uint8Array(take);
+                let offset = 0;
+
+                while (offset < take) {
+                    const head = queue[0];
+                    const need = take - offset;
+
+                    if (head.length <= need) {
+                        out.set(head, offset);
+                        offset += head.length;
+                        queue.shift();
+                    } else {
+                        out.set(head.subarray(0, need), offset);
+                        queue[0] = head.subarray(need);
+                        offset += need;
+                    }
+                }
+
+                queued -= take;
+
+                return out;
+            },
+
+            cancel() {
+                try { reader.cancel(); } catch (error) { /* ignore */ }
+            }
+        };
+    }
+
+    async function inflateEntry(buffer, entry) {
+        const reader = byteReader(entryStream(buffer, entry));
+        return (await reader.pull(entry.size)).buffer;
+    }
+
+    async function openPointSource(buffer) {
+        const sig = new Uint8Array(buffer, 0, 4);
+
+        // ---- ZIP ----
+        if (sig[0] === 0x50 && sig[1] === 0x4b) {
+            const entry = findZipEntry(buffer);
+
+            // a .laz inside the ZIP: unpack it (it is small), then decode as LAZ
+            if (/\.laz$/i.test(entry.name)) {
+                return openPointSource(await inflateEntry(buffer, entry));
+            }
+
+            const first = byteReader(entryStream(buffer, entry));
+            const header = parseLasHeader((await first.pull(375)).buffer);
+            first.cancel();
+
+            if (header.compressed) {
+                throw new Error("The LAS file inside the ZIP is LAZ-compressed under a .las name.");
+            }
+
+            return {
+                kind: "zip",
+                header,
+                async run(onChunk, onProgress) {
+                    const reader = byteReader(entryStream(buffer, entry));
+                    const record = header.recordLength;
+
+                    await reader.pull(header.offsetToPoints);   // header + VLRs
+
+                    for (let done = 0, round = 0; done < header.count; round++) {
+                        const n = Math.min(CHUNK, header.count - done);
+                        const chunk = await reader.pull(n * record);
+
+                        if (chunk.length < n * record) {
+                            throw new Error("The LAS file inside the ZIP ends early (damaged download?).");
+                        }
+
+                        await onChunk(chunk, 0, n, done);
+
+                        done += n;
+                        onProgress?.(done, header.count);
+
+                        if (round % 4 === 3) await yieldToBrowser();
+                    }
+                }
+            };
+        }
+
+        // ---- LAS / LAZ ----
+        const header = parseLasHeader(buffer);
+
+        if (header.compressed) {
+            return {
+                kind: "laz",
+                header,
+                run: (onChunk, onProgress) => decodeLaz(buffer, header, onChunk, onProgress)
+            };
+        }
+
+        return {
+            kind: "las",
+            header,
+            async run(onChunk, onProgress) {
+                const whole = new Uint8Array(buffer);
+                const record = header.recordLength;
+
+                for (let done = 0, round = 0; done < header.count; round++) {
+                    const n = Math.min(CHUNK, header.count - done);
+
+                    await onChunk(whole, header.offsetToPoints + done * record, n, done);
+
+                    done += n;
+                    onProgress?.(done, header.count);
+
+                    if (round % 4 === 3) await yieldToBrowser();
+                }
+            }
+        };
     }
 
     /* ============================================================
@@ -498,6 +813,23 @@
             const u = material.uniforms;
             const section = currentSection;
 
+            // Potree derives near/far from its own point clouds; with only this
+            // cloud in the scene they may be unset, so set them from our box.
+            if (currentPointCloud === points && !(viewer?.scene?.pointclouds?.length > 0)) {
+                const box = points.boundingBox;
+                const radius = box.min.distanceTo(box.max) / 2;
+                const center = box.min.clone().add(box.max).multiplyScalar(0.5);
+                const distance = camera.position.distanceTo(center);
+                const near = Math.max(distance - radius, 0.1);
+                const far = distance + radius * 2;
+
+                if (Math.abs(camera.near - near) > 1e-3 || Math.abs(camera.far - far) > 1e-3) {
+                    camera.near = near;
+                    camera.far = far;
+                    camera.updateProjectionMatrix();
+                }
+            }
+
             u.uScale.value =
                 (renderer.domElement.height / 2) * camera.projectionMatrix.elements[5];
 
@@ -585,7 +917,8 @@
        Load
        ============================================================ */
 
-    async function buildData(buffer, header) {
+    async function buildData(source) {
+        const header = source.header;
         const n = header.count;
         const fmt = header.format;
         const ext = fmt >= 6;
@@ -622,7 +955,7 @@
         const [ox, oy, oz] = header.offset;
         const [mx, my, mz] = data.origin;
 
-        await decodeLaz(buffer, header, (u, base, count, first) => {
+        await source.run((u, base, count, first) => {
             for (let k = 0; k < count; k++) {
                 const p = base + k * rec;
                 const s = slot[first + k];
@@ -713,18 +1046,22 @@
 
             hideSwissImageProgress();
 
-            const header = parseLasHeader(buffer);
+            const source = await openPointSource(buffer);
+            const header = source.header;
 
             if (!header.count || header.count > MAX_POINTS) {
                 throw new Error(`Unsupported point count (${header.count}).`);
             }
 
-            setStatus(`Decoding ${header.count.toLocaleString()} points…`);
+            setStatus(
+                (source.kind === "zip" ? "Unpacking and reading " : "Decoding ") +
+                `${header.count.toLocaleString()} points…`
+            );
 
-            const data = await buildData(buffer, header);
+            const data = await buildData(source);
             const cloud = createCloud(data, header);
 
-            cloud.userData.lazBuffer = buffer;      // kept for the full-resolution export
+            cloud.userData.lazBuffer = buffer;      // (zip or laz) kept for the full-resolution export
             cloud.userData.lazHeader = header;
             cloud.userData.lazUrl = url;
 
@@ -752,5 +1089,5 @@
     };
 
     // Used by export.js
-    window.swissLaz = { parseLasHeader, decodeLaz, fetchBuffer };
+    window.swissLaz = { parseLasHeader, decodeLaz, fetchBuffer, openPointSource };
 })();

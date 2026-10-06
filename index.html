@@ -64,6 +64,14 @@
          APPLICATION CSS
          ===================================================== -->
 
+    <!-- Interface font (change --font in style.css to use another) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        rel="stylesheet"
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+    >
+
     <link
         rel="stylesheet"
         href="./style.css"
@@ -81,19 +89,22 @@
         <div id="potree_render_area"></div>
     </div>
 
-    <!-- Top bar -->
+    <!-- Top bar: actions on the left, title on the right -->
     <header id="topbar">
         <button id="toggle-left" type="button" class="icon-btn" title="Show / hide map and tiles" aria-pressed="true">Map</button>
 
-        <div class="brand">Swiss LiDAR Viewer</div>
-        <div class="brand-subtitle">swissSURFACE3D / COPC</div>
+        <button id="findTilesButton" type="button" class="primary">Find tiles</button>
+        <button id="fitButton" type="button">Fit</button>
+        <button id="clearButton" type="button">Clear</button>
 
-        <div class="top-actions">
-            <button id="findTilesButton" type="button" class="primary">Find tiles</button>
-            <button id="fitButton" type="button">Fit</button>
-            <button id="clearButton" type="button">Clear</button>
-            <button id="readme-button" type="button">About</button>
-            <button id="toggle-right" type="button" class="icon-btn" title="Show / hide controls" aria-pressed="true">Controls</button>
+        <div class="top-spacer"></div>
+
+        <button id="readme-button" type="button">About</button>
+        <button id="toggle-right" type="button" class="icon-btn" title="Show / hide controls" aria-pressed="true">Controls</button>
+
+        <div class="brand-block">
+            <div class="brand">Swiss LiDAR Viewer</div>
+            <div class="brand-subtitle">swissSURFACE3D · COPC and LAZ</div>
         </div>
     </header>
 
@@ -196,6 +207,11 @@
                 </div>
 
                 <div class="ctrl">
+                    <label for="ap-lod">Detail (lower = more points) <output id="ap-lod-out"></output></label>
+                    <input id="ap-lod" type="range" min="5" max="100" step="1">
+                </div>
+
+                <div class="ctrl">
                     <label for="ap-size">Point size <output id="ap-size-out"></output></label>
                     <input id="ap-size" type="range" min="0.1" max="8" step="0.1">
                 </div>
@@ -244,7 +260,7 @@
                         <label for="ap-bg">Background</label>
                         <select id="ap-bg">
                             <option value="#000000">Black</option>
-                            <option value="#1b1f23">Charcoal</option>
+                            <option value="#1a1a1a">Charcoal</option>
                             <option value="#8a9096">Grey</option>
                             <option value="#ffffff">White</option>
                             <option value="gradient">Gradient</option>
@@ -319,8 +335,8 @@
 
         <h3>How it works</h3>
         <ol>
-            <li><strong>Find tiles.</strong> The visible map extent is sent to the swisstopo STAC API, which lists the swissSURFACE3D tiles (1 km × 1 km) that intersect it. Each tile is a Cloud Optimized Point Cloud (COPC) file.</li>
-            <li><strong>View.</strong> Selecting a tile streams its COPC file into the Potree viewer. Only the parts needed for the current view are requested, up to the point budget you set under <em>Appearance</em>.</li>
+            <li><strong>Find tiles.</strong> The visible map extent is sent to the swisstopo STAC API, which lists the swissSURFACE3D tiles (1 km × 1 km) that intersect it. Each tile is a Cloud Optimized Point Cloud (COPC) file; tiles that only exist as a plain LAZ file are supported as well.</li>
+            <li><strong>View.</strong> Selecting a tile streams its COPC file into the Potree viewer. Only the parts needed for the current view are requested, up to the point budget you set under <em>Appearance</em>. A plain LAZ tile cannot be streamed: it is downloaded and decoded completely in the browser, and the point budget then thins it evenly.</li>
             <li><strong>SWISSIMAGE colour.</strong> The swissSURFACE3D points carry no colour. For each point, its LV95 coordinate is converted to Web Mercator and one pixel is read from the SWISSIMAGE orthophoto (WMTS) covering the tile. That pixel becomes the point's RGB value.</li>
             <li><strong>Sections.</strong> A horizontal or vertical box clips the cloud. Position and thickness are set with the sliders.</li>
             <li><strong>Export.</strong> Export reads every node of the COPC file directly, so the result has the full point density and is independent of the viewer's point budget. The section export keeps only the points inside the section box. Files are written as uncompressed LAS 1.4 (point format 7) with a CRS record for CH1903+ / LV95.</li>
@@ -367,6 +383,7 @@
 <!-- Application (order matters: app.js first) -->
 <script src="./config.js"></script>
 <script src="./app.js"></script>
+<script src="./laz.js"></script>
 <script src="./ui.js"></script>
 <script src="./export.js"></script>
 

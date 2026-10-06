@@ -180,7 +180,7 @@
 
             if (!box) return [0, 0, 0];
 
-            if (currentPointCloud.matrixWorld) {
+            if (currentPointCloud.matrixWorld && !currentPointCloud.isLaz) {
                 box.applyMatrix4(currentPointCloud.matrixWorld);
             }
 
@@ -581,15 +581,281 @@
         return null;
     }
 
+    /* ============================================================
+       Writers: COPC (node by node) and plain LAZ (decoded in chunks)
+       ============================================================ */
+
+    async function writeFromCopc({ url, kind, useRgb, sink }) {
+        setStatus("Opening COPC file…");
+
+        const reader = await openCopc(url);
+        const { copc, nodes } = reader;
+        const cube = copc.info.cube;
+
+        // choose nodes
+        let filter = null;
+
+        if (kind === "section") {
+            filter = createSectionFilter(detectWorldOffset(cube));
+        }
+
+        const selected = [];
+        let totalPoints = 0;
+
+        for (const [key, node] of Object.entries(nodes)) {
+            if (!node || !node.pointCount) continue;
+            if (filter && filter.nodeOutside(nodeBounds(key, cube))) continue;
+
+            selected.push({ key, node });
+            totalPoints += node.pointCount;
+        }
+
+        if (!selected.length) {
+            throw new Error("The section does not contain any points.");
+        }
+
+        // coarse-to-fine order keeps the file roughly LOD-sorted
+        selected.sort((a, b) => a.key.split("-")[0] - b.key.split("-")[0]);
+
+        // colour
+        let colour = null;
+
+        if (useRgb) {
+            colour = await createColorSampler({
+                min: [copc.header.min[0], copc.header.min[1], copc.header.min[2]],
+                max: [copc.header.max[0], copc.header.max[1], copc.header.max[2]]
+            });
+        }
+
+        const writer = new LasWriter({
+            scale: copc.header.scale || [0.001, 0.001, 0.001],
+            offset: copc.header.offset || [0, 0, 0],
+            wkt: (copc.wkt && String(copc.wkt).trim()) || LV95_WKT,
+            sink
+        });
+
+        await writer.begin();
+
+        let processed = 0;
+
+        for (let n = 0; n < selected.length; n++) {
+            if (abortRequested) throw new Error("Export cancelled.");
+
+            const view = await reader.loadView(selected[n].node);
+            const count = view.pointCount;
+
+            const X = getter(view, "X");
+            const Y = getter(view, "Y");
+            const Z = getter(view, "Z");
+            const intensity = getter(view, "Intensity");
+            const returnNumber = getter(view, "ReturnNumber");
+            const numberOfReturns = getter(view, "NumberOfReturns");
+            const classification = getter(view, "Classification");
+            const classFlags = getter(view, "ClassificationFlags", "Synthetic");
+            const channel = getter(view, "ScannerChannel");
+            const direction = getter(view, "ScanDirectionFlag");
+            const edge = getter(view, "EdgeOfFlightLine");
+            const userData = getter(view, "UserData");
+            const scanAngle = getter(view, "ScanAngle");
+            const scanAngleRank = scanAngle ? null : getter(view, "ScanAngleRank");
+            const sourceId = getter(view, "PointSourceId");
+            const gps = getter(view, "GpsTime");
+            const red = getter(view, "Red");
+            const green = getter(view, "Green");
+            const blue = getter(view, "Blue");
+
+            if (!X || !Y || !Z) {
+                throw new Error("COPC point data has no X/Y/Z dimensions.");
+            }
+
+            for (let i = 0; i < count; i++) {
+                const x = X(i), y = Y(i), z = Z(i);
+
+                if (filter && !filter.contains(x, y, z)) continue;
+
+                let r = 0, g = 0, b = 0;
+
+                if (colour) {
+                    const rgb = colour.sample(x, y);
+                    r = rgb[0] * 257;
+                    g = rgb[1] * 257;
+                    b = rgb[2] * 257;
+                } else if (red && green && blue) {
+                    r = red(i); g = green(i); b = blue(i);
+                }
+
+                const flags =
+                    ((classFlags ? classFlags(i) : 0) & 15) |
+                    (((channel ? channel(i) : 0) & 3) << 4) |
+                    (((direction ? direction(i) : 0) & 1) << 6) |
+                    (((edge ? edge(i) : 0) & 1) << 7);
+
+                const angle = scanAngle
+                    ? scanAngle(i)
+                    : scanAngleRank ? Math.round(scanAngleRank(i) / 0.006) : 0;
+
+                writer.add(
+                    x, y, z,
+                    intensity ? intensity(i) : 0,
+                    returnNumber ? returnNumber(i) : 1,
+                    numberOfReturns ? numberOfReturns(i) : 1,
+                    flags,
+                    classification ? classification(i) : 0,
+                    userData ? userData(i) : 0,
+                    angle,
+                    sourceId ? sourceId(i) : 0,
+                    gps ? gps(i) : 0,
+                    r, g, b
+                );
+
+                if (writer.full) await writer.flush();
+            }
+
+            processed += count;
+
+            showSwissImageProgress(
+                processed,
+                totalPoints,
+                kind === "section" ? "Exporting section…" : "Exporting tile…"
+            );
+
+            await yieldToBrowser();
+        }
+
+        return writer;
+    }
+
+    async function writeFromLaz({ url, kind, useRgb, sink }) {
+        const lib = window.swissLaz;
+
+        if (!lib) {
+            throw new Error("laz.js is not loaded.");
+        }
+
+        // reuse the file if this tile is already open in the viewer
+        const open = currentPointCloud?.isLaz && currentPointCloud.userData.lazUrl === url
+            ? currentPointCloud
+            : null;
+
+        let buffer = open?.userData.lazBuffer;
+        let header = open?.userData.lazHeader;
+
+        if (!buffer) {
+            setStatus("Downloading LAZ…");
+            buffer = await lib.fetchBuffer(
+                url,
+                (got, total) => showSwissImageProgress(got, total, "Downloading LAZ…")
+            );
+            hideSwissImageProgress();
+            header = lib.parseLasHeader(buffer);
+        }
+
+        const cube = [...header.min, ...header.max];
+        const filter = kind === "section"
+            ? createSectionFilter(detectWorldOffset(cube))
+            : null;
+
+        const colour = useRgb
+            ? await createColorSampler({ min: header.min, max: header.max })
+            : null;
+
+        const writer = new LasWriter({
+            scale: header.scale,
+            offset: header.offset,
+            wkt: LV95_WKT,
+            sink
+        });
+
+        await writer.begin();
+
+        const fmt = header.format;
+        const ext = fmt >= 6;
+        const rec = header.recordLength;
+        const [sx, sy, sz] = header.scale;
+        const [ox, oy, oz] = header.offset;
+
+        // RGB position in the source record, if it has one
+        const rgbAt = { 2: 20, 3: 28, 5: 28, 7: 30, 8: 30, 10: 30 }[fmt];
+        const gpsAt = ext ? 22 : ({ 1: 20, 3: 20, 4: 20, 5: 20 }[fmt]);
+
+        const label = kind === "section" ? "Exporting section…" : "Exporting tile…";
+
+        await lib.decodeLaz(buffer, header, async (u, base, count, first) => {
+            if (abortRequested) throw new Error("Export cancelled.");
+
+            const dv = new DataView(u.buffer);
+
+            for (let k = 0; k < count; k++) {
+                const p = base + k * rec;
+
+                const x = dv.getInt32(p, true) * sx + ox;
+                const y = dv.getInt32(p + 4, true) * sy + oy;
+                const z = dv.getInt32(p + 8, true) * sz + oz;
+
+                if (filter && !filter.contains(x, y, z)) continue;
+
+                const b14 = u[p + 14];
+                const b15 = u[p + 15];
+
+                let ret, nret, cls, flags, user, angle, src;
+
+                if (ext) {
+                    ret = b14 & 15;
+                    nret = b14 >> 4;
+                    flags = b15;
+                    cls = u[p + 16];
+                    user = u[p + 17];
+                    angle = dv.getInt16(p + 18, true);
+                    src = dv.getUint16(p + 20, true);
+                } else {
+                    ret = b14 & 7;
+                    nret = (b14 >> 3) & 7;
+                    cls = b15 & 31;
+                    flags = ((b15 >> 5) & 7) | (((b14 >> 6) & 1) << 6) | (((b14 >> 7) & 1) << 7);
+                    user = u[p + 17];
+                    angle = Math.round(dv.getInt8(p + 16) / 0.006);
+                    src = dv.getUint16(p + 18, true);
+                }
+
+                let r = 0, g = 0, b = 0;
+
+                if (colour) {
+                    const rgb = colour.sample(x, y);
+                    r = rgb[0] * 257; g = rgb[1] * 257; b = rgb[2] * 257;
+                } else if (rgbAt !== undefined) {
+                    r = dv.getUint16(p + rgbAt, true);
+                    g = dv.getUint16(p + rgbAt + 2, true);
+                    b = dv.getUint16(p + rgbAt + 4, true);
+                }
+
+                writer.add(
+                    x, y, z,
+                    dv.getUint16(p + 12, true),
+                    ret, nret, flags, cls, user, angle, src,
+                    gpsAt !== undefined ? dv.getFloat64(p + gpsAt, true) : 0,
+                    r, g, b
+                );
+
+                if (writer.full) await writer.flush();
+            }
+
+            showSwissImageProgress(first + count, header.count, label);
+        });
+
+        return writer;
+    }
+
     async function runExport(kind) {
         if (exporting) return;
 
         const url = currentTile && getCopcUrl(currentTile);
 
         if (!url) {
-            setStatus("No COPC file for this tile.");
+            setStatus("No point-cloud file for this tile.");
             return;
         }
+
+        const isLaz = !isCopcUrl(url);
 
         if (kind === "section" && !currentSection) {
             setStatus("Create a section first.");
@@ -622,141 +888,9 @@
         let finished = false;
 
         try {
-            setStatus("Opening COPC file…");
-
-            const reader = await openCopc(url);
-            const { copc, nodes } = reader;
-            const cube = copc.info.cube;
-
-            // choose nodes
-            let filter = null;
-
-            if (kind === "section") {
-                filter = createSectionFilter(detectWorldOffset(cube));
-            }
-
-            const selected = [];
-            let totalPoints = 0;
-
-            for (const [key, node] of Object.entries(nodes)) {
-                if (!node || !node.pointCount) continue;
-                if (filter && filter.nodeOutside(nodeBounds(key, cube))) continue;
-
-                selected.push({ key, node });
-                totalPoints += node.pointCount;
-            }
-
-            if (!selected.length) {
-                throw new Error("The section does not contain any points.");
-            }
-
-            // coarse-to-fine order keeps the file roughly LOD-sorted
-            selected.sort((a, b) => a.key.split("-")[0] - b.key.split("-")[0]);
-
-            // colour
-            let colour = null;
-
-            if (useRgb) {
-                colour = await createColorSampler({
-                    min: [copc.header.min[0], copc.header.min[1], copc.header.min[2]],
-                    max: [copc.header.max[0], copc.header.max[1], copc.header.max[2]]
-                });
-            }
-
-            const writer = new LasWriter({
-                scale: copc.header.scale || [0.001, 0.001, 0.001],
-                offset: copc.header.offset || [0, 0, 0],
-                wkt: (copc.wkt && String(copc.wkt).trim()) || LV95_WKT,
-                sink
-            });
-
-            await writer.begin();
-
-            let processed = 0;
-
-            for (let n = 0; n < selected.length; n++) {
-                if (abortRequested) throw new Error("Export cancelled.");
-
-                const view = await reader.loadView(selected[n].node);
-                const count = view.pointCount;
-
-                const X = getter(view, "X");
-                const Y = getter(view, "Y");
-                const Z = getter(view, "Z");
-                const intensity = getter(view, "Intensity");
-                const returnNumber = getter(view, "ReturnNumber");
-                const numberOfReturns = getter(view, "NumberOfReturns");
-                const classification = getter(view, "Classification");
-                const classFlags = getter(view, "ClassificationFlags", "Synthetic");
-                const channel = getter(view, "ScannerChannel");
-                const direction = getter(view, "ScanDirectionFlag");
-                const edge = getter(view, "EdgeOfFlightLine");
-                const userData = getter(view, "UserData");
-                const scanAngle = getter(view, "ScanAngle");
-                const scanAngleRank = scanAngle ? null : getter(view, "ScanAngleRank");
-                const sourceId = getter(view, "PointSourceId");
-                const gps = getter(view, "GpsTime");
-                const red = getter(view, "Red");
-                const green = getter(view, "Green");
-                const blue = getter(view, "Blue");
-
-                if (!X || !Y || !Z) {
-                    throw new Error("COPC point data has no X/Y/Z dimensions.");
-                }
-
-                for (let i = 0; i < count; i++) {
-                    const x = X(i), y = Y(i), z = Z(i);
-
-                    if (filter && !filter.contains(x, y, z)) continue;
-
-                    let r = 0, g = 0, b = 0;
-
-                    if (colour) {
-                        const rgb = colour.sample(x, y);
-                        r = rgb[0] * 257;
-                        g = rgb[1] * 257;
-                        b = rgb[2] * 257;
-                    } else if (red && green && blue) {
-                        r = red(i); g = green(i); b = blue(i);
-                    }
-
-                    const flags =
-                        ((classFlags ? classFlags(i) : 0) & 15) |
-                        (((channel ? channel(i) : 0) & 3) << 4) |
-                        (((direction ? direction(i) : 0) & 1) << 6) |
-                        (((edge ? edge(i) : 0) & 1) << 7);
-
-                    const angle = scanAngle
-                        ? scanAngle(i)
-                        : scanAngleRank ? Math.round(scanAngleRank(i) / 0.006) : 0;
-
-                    writer.add(
-                        x, y, z,
-                        intensity ? intensity(i) : 0,
-                        returnNumber ? returnNumber(i) : 1,
-                        numberOfReturns ? numberOfReturns(i) : 1,
-                        flags,
-                        classification ? classification(i) : 0,
-                        userData ? userData(i) : 0,
-                        angle,
-                        sourceId ? sourceId(i) : 0,
-                        gps ? gps(i) : 0,
-                        r, g, b
-                    );
-
-                    if (writer.full) await writer.flush();
-                }
-
-                processed += count;
-
-                showSwissImageProgress(
-                    processed,
-                    totalPoints,
-                    kind === "section" ? "Exporting section…" : "Exporting tile…"
-                );
-
-                await yieldToBrowser();
-            }
+            const writer = isLaz
+                ? await writeFromLaz({ url, kind, useRgb, sink })
+                : await writeFromCopc({ url, kind, useRgb, sink });
 
             if (kind === "section" && writer.count === 0) {
                 throw new Error("No points inside the section box.");

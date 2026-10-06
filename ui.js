@@ -22,6 +22,7 @@
             50,
             Math.max(0.5, (CONFIG.POINT_BUDGET || 20000000) / 1e6)
         ),
+        minNodeSize: 30,
         size: 1.5,
         sizeType: "ADAPTIVE",
         shape: "CIRCLE",
@@ -64,6 +65,12 @@
     }
 
     function applyToPointCloud(pointcloud) {
+        // plain LAZ clouds are drawn by laz.js
+        if (pointcloud?.isLaz) {
+            pointcloud.lazApplyAppearance(settings);
+            return;
+        }
+
         const material = pointcloud?.material;
 
         if (!material) {
@@ -73,15 +80,32 @@
         material.size = settings.size;
         material.opacity = settings.opacity;
 
-        if (Potree.PointSizeType?.[settings.sizeType] !== undefined) {
-            material.pointSizeType = Potree.PointSizeType[settings.sizeType];
+        // only touch the shader when size mode or shape really change
+        let shaderChanged = false;
+
+        const sizeType = Potree.PointSizeType?.[settings.sizeType];
+
+        if (sizeType !== undefined && material.pointSizeType !== sizeType) {
+            material.pointSizeType = sizeType;
+            shaderChanged = true;
         }
 
-        if (Potree.PointShape?.[settings.shape] !== undefined) {
-            material.shape = Potree.PointShape[settings.shape];
+        const shape = Potree.PointShape?.[settings.shape];
+
+        if (shape !== undefined && material.shape !== shape) {
+            material.shape = shape;
+            shaderChanged = true;
         }
 
-        material.needsUpdate = true;
+        if (shaderChanged) {
+            try {
+                material.updateShaderSource?.();
+            } catch (error) {
+                console.warn("Could not refresh Potree shader:", error);
+            }
+
+            material.needsUpdate = true;
+        }
     }
 
     // Called by app.js whenever a point cloud is configured.
@@ -90,6 +114,10 @@
             applyToPointCloud(pointcloud);
         } else {
             allPointClouds().forEach(applyToPointCloud);
+
+            if (currentPointCloud?.isLaz) {
+                applyToPointCloud(currentPointCloud);
+            }
         }
     };
 
@@ -127,6 +155,10 @@
 
         viewer.setPointBudget(Math.round(settings.budget * 1e6));
         viewer.setFOV(settings.fov);
+
+        if (typeof viewer.setMinNodeSize === "function") {
+            viewer.setMinNodeSize(settings.minNodeSize);
+        }
         viewer.setEDLEnabled(settings.edl);
 
         if (typeof viewer.setEDLStrength === "function") {
@@ -191,8 +223,13 @@
         }
 
         if (currentPointCloud && el("color-mode")?.value === "swissimage") {
-            // no-op if already running; the running loop rebuilds the raster
-            startSwissImageProcessing();
+            if (currentPointCloud.isLaz) {
+                // re-bake the whole tile once with the new raster
+                void currentPointCloud.lazSetColorMode("swissimage");
+            } else {
+                // no-op if already running; the running loop rebuilds the raster
+                startSwissImageProcessing();
+            }
         }
     }
 
@@ -201,6 +238,7 @@
        ------------------------------------------------------------ */
 
     const fmt = {
+        minNodeSize: v => `${v} px`,
         budget: v => `${Number(v).toLocaleString(undefined, { maximumFractionDigits: 1 })} M`,
         size: v => Number(v).toFixed(1),
         opacity: v => `${Math.round(v * 100)} %`,
@@ -209,6 +247,7 @@
     };
 
     const outputIds = {
+        minNodeSize: "ap-lod-out",
         budget: "ap-budget-out",
         size: "ap-size-out",
         opacity: "ap-opacity-out",
@@ -217,6 +256,7 @@
     };
 
     const rangeIds = {
+        minNodeSize: "ap-lod",
         budget: "ap-budget",
         size: "ap-size",
         opacity: "ap-opacity",

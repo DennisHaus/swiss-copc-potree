@@ -35,8 +35,8 @@
        Download
        ============================================================ */
 
-    async function fetchBuffer(url, onProgress) {
-        const response = await fetch(url);
+    async function fetchBuffer(url, onProgress, signal) {
+        const response = await fetch(url, signal ? { signal } : undefined);
 
         if (!response.ok) {
             throw new Error(`Download failed (${response.status})`);
@@ -850,7 +850,23 @@
 
             try {
                 if (mode === "swissimage") {
-                    await bakeSwissImage(points, force);
+                    const upToDate =
+                        !force &&
+                        data.swissRgba &&
+                        swissImageRasterIsCurrent() &&
+                        data.swissRasterId === SWISSIMAGE_RGB.raster.id;
+
+                    if (!upToDate) {
+                        // the tile must not be switched while colours are computed
+                        setBusy(true, "Colouring tile with SWISSIMAGE…");
+                    }
+
+                    try {
+                        await bakeSwissImage(points, force);
+                    } finally {
+                        if (!upToDate) setBusy(false);
+                    }
+
                     if (token !== colorToken) return;
                     data.color.set(data.swissRgba);
                 } else {
@@ -917,7 +933,7 @@
        Load
        ============================================================ */
 
-    async function buildData(source) {
+    async function buildData(source, job) {
         const header = source.header;
         const n = header.count;
         const fmt = header.format;
@@ -956,6 +972,10 @@
         const [mx, my, mz] = data.origin;
 
         await source.run((u, base, count, first) => {
+            if (job?.cancelled) {
+                throw new Error("Loading cancelled.");
+            }
+
             for (let k = 0; k < count; k++) {
                 const p = base + k * rec;
                 const s = slot[first + k];
@@ -1036,12 +1056,22 @@
 
         enforcePointCloudLimit();
 
+        // Lock the whole app until the tile is completely loaded (or cancelled).
+        const job = { cancelled: false, controller: new AbortController() };
+
+        setBusy(true, "Downloading tile…", () => {
+            job.cancelled = true;
+            job.controller.abort();
+            setStatus("Cancelling…");
+        });
+
         try {
-            setStatus("Downloading LAZ…");
+            setStatus("Downloading tile…");
 
             const buffer = await fetchBuffer(
                 url,
-                (got, total) => showSwissImageProgress(got, total, "Downloading LAZ…")
+                (got, total) => showSwissImageProgress(got, total, "Downloading…"),
+                job.controller.signal
             );
 
             hideSwissImageProgress();
@@ -1058,7 +1088,7 @@
                 `${header.count.toLocaleString()} points…`
             );
 
-            const data = await buildData(source);
+            const data = await buildData(source, job);
             const cloud = createCloud(data, header);
 
             cloud.userData.lazBuffer = buffer;      // (zip or laz) kept for the full-resolution export
@@ -1079,12 +1109,20 @@
             fitCurrentPointCloud();
             updateControlState();
 
-            setStatus(`LAZ loaded: ${header.count.toLocaleString()} points.`);
+            setStatus(`Tile loaded: ${header.count.toLocaleString()} points.`);
         } catch (error) {
             hideSwissImageProgress();
-            console.error("[laz] loading failed:", error);
-            setStatus(`LAZ loading failed: ${error.message}`);
+
+            if (job.cancelled || error?.name === "AbortError") {
+                setStatus("Loading cancelled.");
+            } else {
+                console.error("[laz] loading failed:", error);
+                setStatus(`Loading failed: ${error.message}`);
+            }
+
             updateControlState();
+        } finally {
+            setBusy(false);
         }
     };
 

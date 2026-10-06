@@ -55,6 +55,8 @@ const tileLayers = new Map();
 
 let selectedTileKey = null;
 let swissImageProcessRunning = false;
+var busyDepth = 0;
+var busyCancel = null;
 let swissImageColoring = false;
 
 /* ============================================================
@@ -101,7 +103,155 @@ function setStatus(message) {
         element.textContent = message || "";
     }
 
+    // while the app is locked, show the current step in the lock screen too
+    if (busyDepth > 0) {
+        const text = document.querySelector("#busy-overlay .busy-message");
+
+        if (text) {
+            text.textContent = message || "";
+        }
+    }
+
     console.log("[swiss-copc]", message);
+}
+
+/* ============================================================
+   BUSY LOCK
+   ============================================================ */
+
+/*
+ * While a LAS/LAZ tile is being loaded the whole app is locked: a full-screen
+ * overlay blocks the mouse and the app container is made inert (no keyboard
+ * or focus either). Otherwise the user could select another tile while the
+ * first one is still being decoded and the colours would no longer match.
+ *
+ * setBusy(true, ...) / setBusy(false) calls nest; always unlock in a finally.
+ * An optional cancel callback adds a "Cancel" button (the only way out).
+ */
+function ensureBusyOverlay() {
+    let overlay = document.getElementById("busy-overlay");
+
+    if (overlay) {
+        return overlay;
+    }
+
+    const style = document.createElement("style");
+
+    style.textContent = `
+        #busy-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 9000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.6);
+            cursor: progress;
+        }
+        #busy-overlay[hidden] { display: none; }
+        #busy-overlay .busy-card {
+            width: min(420px, calc(100vw - 32px));
+            padding: 22px 24px;
+            border: 1px solid #262626;
+            border-radius: 10px;
+            background: #050505;
+            color: #ececec;
+            font: 13px/1.45 var(--font, system-ui, sans-serif);
+            text-align: center;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.7);
+        }
+        #busy-overlay .busy-spinner {
+            width: 26px;
+            height: 26px;
+            margin: 0 auto 12px;
+            border: 3px solid #333;
+            border-top-color: var(--accent, #2c6fd8);
+            border-radius: 50%;
+            animation: busy-spin 0.8s linear infinite;
+        }
+        #busy-overlay .busy-title { font-size: 15px; font-weight: 600; }
+        #busy-overlay .busy-message { margin-top: 6px; color: #c4c4c4; min-height: 1.4em; word-break: break-word; }
+        #busy-overlay .busy-hint { margin-top: 8px; color: #8c8c8c; font-size: 11px; }
+        #busy-overlay .busy-cancel {
+            margin-top: 14px;
+            height: 32px;
+            padding: 0 14px;
+            border: 1px solid #2c2c2c;
+            border-radius: 5px;
+            background: #1f1f1f;
+            color: #ececec;
+            font: inherit;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        #busy-overlay .busy-cancel:hover { background: #2c2c2c; }
+        #busy-overlay .busy-cancel[hidden] { display: none; }
+        @keyframes busy-spin { to { transform: rotate(360deg); } }
+    `;
+
+    document.head.appendChild(style);
+
+    overlay = document.createElement("div");
+    overlay.id = "busy-overlay";
+    overlay.hidden = true;
+    overlay.setAttribute("role", "alertdialog");
+    overlay.setAttribute("aria-live", "assertive");
+    overlay.setAttribute("aria-label", "Loading, please wait");
+
+    overlay.innerHTML = `
+        <div class="busy-card">
+            <div class="busy-spinner"></div>
+            <div class="busy-title">Please wait</div>
+            <div class="busy-message"></div>
+            <div class="busy-hint">The app is locked until loading has finished.</div>
+            <button type="button" class="busy-cancel" hidden>Cancel loading</button>
+        </div>
+    `;
+
+    overlay.querySelector(".busy-cancel").addEventListener("click", () => {
+        if (typeof busyCancel === "function") {
+            busyCancel();
+        }
+    });
+
+    document.body.appendChild(overlay);
+
+    return overlay;
+}
+
+function setBusy(active, message, onCancel) {
+    const overlay = ensureBusyOverlay();
+
+    busyDepth = Math.max(0, busyDepth + (active ? 1 : -1));
+
+    const on = busyDepth > 0;
+
+    if (active && typeof onCancel === "function") {
+        busyCancel = onCancel;
+    }
+
+    if (!on) {
+        busyCancel = null;
+    }
+
+    overlay.hidden = !on;
+
+    const text = overlay.querySelector(".busy-message");
+    const cancel = overlay.querySelector(".busy-cancel");
+
+    if (on && message && text) {
+        text.textContent = message;
+    }
+
+    if (cancel) {
+        cancel.hidden = !(on && busyCancel);
+    }
+
+    const app = getEl("app");
+
+    if (app) {
+        app.inert = on;
+    }
 }
 
 function escapeHtml(value) {
@@ -395,13 +545,23 @@ async function findTilesFromMap() {
 
         const data = await response.json();
 
-        currentTiles = Array.isArray(data.features)
+        const found = Array.isArray(data.features)
             ? data.features
             : [];
 
+        const preferred = preferCopcTiles(found);
+
+        currentTiles = preferred.tiles;
+
         renderTiles();
 
-        setStatus(`${currentTiles.length} tile(s) found.`);
+        setStatus(
+            `${currentTiles.length} tile(s) found` +
+            (preferred.hidden
+                ? ` (${preferred.hidden} older non-COPC version(s) hidden where a COPC file exists)`
+                : "") +
+            "."
+        );
     } catch (error) {
         console.error("Tile search failed:", error);
         setStatus(`Tile search failed: ${error.message}`);
@@ -694,47 +854,115 @@ function updateSelectedPanel(tile) {
    COPC
    ============================================================ */
 
-function getCopcUrl(tile) {
+/*
+ * Which file of a STAC item to use. COPC always wins; the older deliveries
+ * (.laz, then .las.zip / .las) are only used when the item has no COPC file.
+ *
+ *   0  file name ends in .copc / .copc.laz
+ *   1  (not a zip) key, type or role mentions "copc"
+ *   2  plain .laz
+ *   3  .las / .las.zip / .laz.zip
+ */
+function pickTileAsset(tile) {
     if (!tile?.assets) {
-        return null;
+        return { href: null, rank: Infinity };
     }
+
+    let bestHref = null;
+    let bestRank = Infinity;
 
     for (const [key, asset] of Object.entries(tile.assets)) {
         const href = asset?.href || "";
-        const type = asset?.type || "";
-        const roles = Array.isArray(asset?.roles)
-            ? asset.roles
-            : [];
+
+        if (!href) {
+            continue;
+        }
+
+        const roles = Array.isArray(asset?.roles) ? asset.roles : [];
 
         const text =
-            `${key} ${href} ${type} ${roles.join(" ")}`
+            `${key} ${href} ${asset?.type || ""} ${roles.join(" ")}`
                 .toLowerCase();
 
-        if (
-            text.includes("copc") ||
-            /\.copc(\.laz)?($|\?)/i.test(href)
-        ) {
-            return href;
+        const isZip = /\.zip($|\?)/i.test(href);
+
+        let rank = Infinity;
+
+        if (/\.copc(\.laz)?($|\?)/i.test(href)) {
+            rank = 0;
+        } else if (!isZip && text.includes("copc")) {
+            rank = 1;
+        } else if (/\.laz($|\?)/i.test(href)) {
+            rank = 2;
+        } else if (/\.la[sz](\.zip)?($|\?)/i.test(href)) {
+            rank = 3;
+        }
+
+        if (rank < bestRank) {
+            bestRank = rank;
+            bestHref = href;
         }
     }
 
-    // no COPC: plain LAZ first, then the older .las.zip / .las deliveries
-    for (const pattern of [/\.laz($|\?)/i, /\.las(\.zip)?($|\?)/i]) {
-        for (const asset of Object.values(tile.assets)) {
-            const href = asset?.href || "";
+    return { href: bestHref, rank: bestRank };
+}
 
-            if (pattern.test(href)) {
-                return href;
-            }
+function getCopcUrl(tile) {
+    return pickTileAsset(tile).href;
+}
+
+/* 0 = COPC, 1 = LAZ, 2 = LAS/ZIP, 99 = no point-cloud file */
+function tileSourceRank(tile) {
+    const { href, rank } = pickTileAsset(tile);
+
+    if (!href) {
+        return 99;
+    }
+
+    // the same decision that picked the file decides how it is loaded
+    return rank <= 1 ? 0 : rank - 1;
+}
+
+/* Items of the same 1 km tile (e.g. different years) share a footprint. */
+function tileFootprintKey(tile) {
+    const bbox = tile?.bbox;
+
+    if (Array.isArray(bbox) && bbox.length >= 4) {
+        return bbox.slice(0, 4).map(v => Number(v).toFixed(4)).join(",");
+    }
+
+    const match = String(tile?.id || "").match(/(\d{4}-\d{4})/);
+
+    return match ? match[1] : String(tile?.id || Math.random());
+}
+
+/*
+ * Where a tile exists as COPC, drop the other (older, non-COPC) items of the
+ * same footprint. Without this the overlapping footprints on the map can
+ * make a click select the old .las.zip item instead of the COPC one.
+ */
+function preferCopcTiles(tiles) {
+    const withCopc = new Set();
+
+    for (const tile of tiles) {
+        if (tileSourceRank(tile) === 0) {
+            withCopc.add(tileFootprintKey(tile));
         }
     }
 
-    return null;
+    const kept = tiles.filter(tile =>
+        tileSourceRank(tile) === 0 ||
+        !withCopc.has(tileFootprintKey(tile))
+    );
+
+    return { tiles: kept, hidden: tiles.length - kept.length };
 }
 
 /* COPC streams through Potree; plain LAZ is decoded by laz.js. */
 function isCopcUrl(url) {
-    return /copc/i.test(String(url || ""));
+    const text = String(url || "");
+
+    return !/\.zip($|\?)/i.test(text) && /copc/i.test(text);
 }
 
 async function loadSelectedTile() {
@@ -756,7 +984,7 @@ async function loadSelectedTile() {
     }
 
     // Tiles without a COPC asset: plain LAZ file (see laz.js).
-    if (!isCopcUrl(copcUrl)) {
+    if (tileSourceRank(currentTile) !== 0) {
         if (typeof window.loadLazTile !== "function") {
             setStatus("LAZ support (laz.js) is not loaded.");
             return;

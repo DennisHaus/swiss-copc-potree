@@ -860,7 +860,7 @@
             return;
         }
 
-        const isLaz = !isCopcUrl(url);
+        const isLaz = tileSourceRank(currentTile) !== 0;
 
         if (kind === "section" && !currentSection) {
             setStatus("Create a section first.");

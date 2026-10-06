@@ -177,6 +177,12 @@
                     <option value="number-of-returns">Number of returns</option>
                     <option value="source-id">Source ID</option>
                 </select>
+
+                <div class="ctrl swiss-res">
+                    <label for="swiss-zoom">SWISSIMAGE resolution <output id="swiss-zoom-out"></output></label>
+                    <input id="swiss-zoom" type="range" min="15" max="20" step="1">
+                    <div id="swiss-zoom-info" class="section-info"></div>
+                </div>
             </div>
         </details>
 
@@ -322,7 +328,7 @@
 
         <h3>Notes</h3>
         <ul>
-            <li>SWISSIMAGE colour is sampled from a raster that may be limited in resolution for browser memory reasons; the colour of a point therefore comes from the nearest raster pixel at that resolution.</li>
+            <li>The colour of a point is the SWISSIMAGE pixel it falls on. The pixel size is set with <em>SWISSIMAGE resolution</em> (up to the native 10 cm). Higher resolution means more tiles to download and more memory; it also applies to the export.</li>
             <li>Large exports need time and disk space. Chromium-based browsers write directly to disk; other browsers assemble the file in memory first.</li>
         </ul>
 

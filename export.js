@@ -267,26 +267,22 @@
     async function createColorSampler(bounds) {
         const key = tileKey(currentTile, 0);
 
-        if (!SWISSIMAGE_RGB.raster || SWISSIMAGE_RGB.raster.tileKey !== key) {
+        if (
+            !SWISSIMAGE_RGB.raster ||
+            SWISSIMAGE_RGB.raster.tileKey !== key ||
+            SWISSIMAGE_RGB.raster.requestedZoom !== SWISSIMAGE_RGB.zoom
+        ) {
             setStatus("Preparing SWISSIMAGE for export…");
             await prepareSwissImageRaster();
         }
 
         const raster = SWISSIMAGE_RGB.raster;
 
-        if (!raster?.context) {
+        if (!raster?.rgb) {
             throw new Error("SWISSIMAGE raster is not available.");
         }
 
-        let pixels;
-
-        try {
-            pixels = raster.context.getImageData(0, 0, raster.width, raster.height).data;
-        } catch (error) {
-            throw new Error(
-                "SWISSIMAGE pixels cannot be read (CORS). " + error.message
-            );
-        }
+        const pixels = raster.rgb;
 
         // LV95 -> Web Mercator on a coarse grid; bilinear in between.
         // Over one tile this is accurate to far below one pixel and avoids
@@ -344,7 +340,7 @@
                 return out;
             }
 
-            const p = (iy * raster.width + ix) * 4;
+            const p = (iy * raster.width + ix) * 3;
             out[0] = pixels[p];
             out[1] = pixels[p + 1];
             out[2] = pixels[p + 2];

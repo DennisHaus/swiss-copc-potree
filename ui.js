@@ -30,7 +30,8 @@
         edl: true,
         edlStrength: 1,
         bg: "#000000",
-        bgCustom: "#101418"
+        bgCustom: "#101418",
+        swissZoom: 19
     };
 
     let settings = loadSettings();
@@ -137,6 +138,65 @@
     }
 
     /* ------------------------------------------------------------
+       SWISSIMAGE resolution
+       ------------------------------------------------------------ */
+
+    // Ground size of one WMTS pixel (Web Mercator) at a latitude.
+    function groundResolution(zoom, latitude) {
+        return (156543.03392804097 / Math.pow(2, zoom)) *
+            Math.cos((latitude * Math.PI) / 180);
+    }
+
+    function swissInfoText(zoom) {
+        const bbox = currentTile?.bbox;
+        const latitude = Array.isArray(bbox) ? (bbox[1] + bbox[3]) / 2 : 46.8;
+        const res = groundResolution(zoom, latitude);
+
+        const pixelsPerSide = 1000 / res;
+        const tilesPerSide = Math.ceil(pixelsPerSide / 256) + 1;
+        const side = tilesPerSide * 256;
+        const megabytes = (side * side * 3) / 1e6;
+
+        const cm = res * 100;
+        const resText = cm >= 100 ? `${(cm / 100).toFixed(1)} m` : `${Math.round(cm)} cm`;
+
+        return {
+            label: `${resText}/px${zoom >= 20 ? " (native)" : ""}`,
+            info:
+                `About ${(side / 1000).toFixed(1)}k × ${(side / 1000).toFixed(1)} px, ` +
+                `${(tilesPerSide * tilesPerSide).toLocaleString()} map tiles to download, ` +
+                `${megabytes >= 1000 ? (megabytes / 1000).toFixed(1) + " GB" : Math.round(megabytes) + " MB"} memory. ` +
+                `Also used for the export.`
+        };
+    }
+
+    window.updateSwissInfo = function () {
+        const slider = el("swiss-zoom");
+        if (!slider) return;
+
+        const text = swissInfoText(Number(slider.value));
+        el("swiss-zoom-out").textContent = text.label;
+        el("swiss-zoom-info").textContent = text.info;
+    };
+
+    // Switch the raster and recolour the point cloud.
+    function applySwissZoom() {
+        SWISSIMAGE_RGB.zoom = settings.swissZoom;
+
+        const raster = SWISSIMAGE_RGB.raster;
+
+        if (raster && raster.requestedZoom !== settings.swissZoom) {
+            SWISSIMAGE_RGB.raster = null;
+            SWISSIMAGE_RGB.cache.clear();
+        }
+
+        if (currentPointCloud && el("color-mode")?.value === "swissimage") {
+            // no-op if already running; the running loop rebuilds the raster
+            startSwissImageProcessing();
+        }
+    }
+
+    /* ------------------------------------------------------------
        Bind controls
        ------------------------------------------------------------ */
 
@@ -180,9 +240,24 @@
         el("ap-bg-color").value = settings.bgCustom;
 
         el("ap-edl-strength").disabled = !settings.edl;
+
+        el("swiss-zoom").value = settings.swissZoom;
+        window.updateSwissInfo();
     }
 
     function bindAppearance() {
+        el("swiss-zoom")?.addEventListener("input", event => {
+            settings.swissZoom = Number(event.target.value);
+            window.updateSwissInfo();
+        });
+
+        // Rebuilding the raster is heavy, so only apply when the slider is released.
+        el("swiss-zoom")?.addEventListener("change", event => {
+            settings.swissZoom = Number(event.target.value);
+            saveSettings();
+            applySwissZoom();
+        });
+
         for (const [key, id] of Object.entries(rangeIds)) {
             el(id)?.addEventListener("input", event => {
                 settings[key] = Number(event.target.value);
@@ -230,6 +305,7 @@
             saveSettings();
             syncControls();
             applyViewerSettings();
+            applySwissZoom();
             setStatus("Appearance reset.");
         });
     }
@@ -304,6 +380,7 @@
        ------------------------------------------------------------ */
 
     document.addEventListener("DOMContentLoaded", () => {
+        SWISSIMAGE_RGB.zoom = settings.swissZoom;
         syncControls();
         bindAppearance();
         bindLayout();

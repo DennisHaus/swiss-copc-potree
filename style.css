@@ -10,8 +10,8 @@
     --field: #22272d;
     --text: #e7e9eb;
     --muted: #8d969f;
-    --accent: #d8232a;
-    --accent-hover: #ee3a40;
+    --accent: #2c6fd8;
+    --accent-hover: #4586ee;
     --ok: #3f8f5a;
 
     --top: 52px;
@@ -362,6 +362,7 @@ output { float: right; color: #c3c9cf; font-variant-numeric: tabular-nums; }
 .ctrl.check label { margin: 0; color: #c3c9cf; font-size: 12px; }
 
 .section-buttons { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+.swiss-res { margin: 14px 0 0; }
 .section-info { margin-top: 9px; color: var(--muted); font-size: 11px; line-height: 1.45; }
 
 .section-control label { display: block; margin: 8px 0 3px; }

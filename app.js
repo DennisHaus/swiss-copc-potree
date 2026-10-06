@@ -65,11 +65,11 @@ const SWISSIMAGE_RGB = {
     layer: "ch.swisstopo.swissimage-product",
 
     /*
-     * Zoom 25 is the native 10 cm-ish scale used by the
-     * SWISSIMAGE product. We automatically lower the zoom
-     * if a tile footprint would require too many WMTS tiles.
+     * WMTS zoom level used for the SWISSIMAGE raster. Zoom 20 is
+     * about the native 10 cm/pixel. Set from the UI slider
+     * (see ui.js); lowered automatically if it would not fit in memory.
      */
-    zoom: 25,
+    zoom: 19,
 
     tileSize: 256,
 
@@ -350,6 +350,10 @@ function updateControlState() {
 
     if (typeof window.updateExportButtons === "function") {
         window.updateExportButtons();
+    }
+
+    if (typeof window.updateSwissInfo === "function") {
+        window.updateSwissInfo();
     }
 }
 
@@ -1709,7 +1713,8 @@ function clearSection() {
 
            if (
                !SWISSIMAGE_RGB.raster ||
-               SWISSIMAGE_RGB.raster.tileKey !== currentKey
+               SWISSIMAGE_RGB.raster.tileKey !== currentKey ||
+               SWISSIMAGE_RGB.raster.requestedZoom !== SWISSIMAGE_RGB.zoom
            ) {
                setStatus("Preparing SWISSIMAGE…");
                await prepareSwissImageRaster();
@@ -1754,142 +1759,60 @@ async function prepareSwissImageRaster() {
     }
 
     if (!currentTile?.bbox) {
-        throw new Error(
-            "Selected tile has no bbox."
-        );
+        throw new Error("Selected tile has no bbox.");
     }
 
     if (typeof proj4 !== "function") {
-        throw new Error(
-            "proj4 is not available."
-        );
+        throw new Error("proj4 is not available.");
     }
 
     SWISSIMAGE_RGB.loading = true;
 
+    let progressShown = false;
+
     try {
-        const [
-            west,
-            south,
-            east,
-            north
-        ] = currentTile.bbox;
+        const [west, south, east, north] = currentTile.bbox;
 
-        console.log(
-    "[swiss-copc] currentTile bbox:",
-    currentTile.bbox
-);
+        // WGS84 -> LV95 -> Web Mercator
+        const sw = proj4("EPSG:4326", "EPSG:2056", [west, south]);
+        const ne = proj4("EPSG:4326", "EPSG:2056", [east, north]);
+
+        const sw3857 = proj4("EPSG:2056", "EPSG:3857", sw);
+        const ne3857 = proj4("EPSG:2056", "EPSG:3857", ne);
 
         /*
-         * WGS84 -> LV95.
-         */
-        const sw = proj4(
-            "EPSG:4326",
-            "EPSG:2056",
-            [west, south]
-        );
-
-        const ne = proj4(
-            "EPSG:4326",
-            "EPSG:2056",
-            [east, north]
-        );
-
-        /*
-         * LV95 -> WebMercator.
-         */
-        const sw3857 = proj4(
-            "EPSG:2056",
-            "EPSG:3857",
-            sw
-        );
-
-        const ne3857 = proj4(
-            "EPSG:2056",
-            "EPSG:3857",
-            ne
-        );
-
-        /*
-         * A full 1 km x 1 km 10 cm raster is approximately
-         * 100 million pixels. We deliberately do not compare
-         * that number with the LiDAR point count.
+         * The raster is stored as ONE plain RGB byte array
+         * (3 bytes per pixel) instead of a canvas. That avoids
+         * browser canvas size limits and makes pixel lookups cheap.
          *
-         * Instead, these limits only control how many WMTS
-         * tiles are stitched into the browser canvas.
-         *
-         * If the native zoom requires too many tiles, we lower
-         * the zoom. The LiDAR points are still sampled from
-         * the resulting raster.
+         * Memory: width * height * 3 bytes. The native 10 cm
+         * SWISSIMAGE (WMTS zoom 20) is ~10,000 x 10,000 px = ~300 MB.
+         * If the requested zoom would exceed MAX_RASTER_PIXELS the
+         * zoom is lowered until it fits.
          */
-        const MAX_RASTER_PIXELS =
-            32 * 1024 * 1024;
+        const MAX_RASTER_PIXELS = 160 * 1024 * 1024;
+        const tileSize = SWISSIMAGE_RGB.tileSize;
+        const requestedZoom = SWISSIMAGE_RGB.zoom;
 
-        const MAX_RASTER_TILES = 128;
-
-        let z = SWISSIMAGE_RGB.zoom;
-
-        let minX;
-        let maxX;
-        let minY;
-        let maxY;
-        let tilesWide;
-        let tilesHigh;
+        let z = requestedZoom;
+        let minX, maxX, minY, maxY, tilesWide, tilesHigh;
 
         while (true) {
-            const minTile =
-                mercatorToTile(
-                    sw3857[0],
-                    ne3857[1],
-                    z
-                );
+            const minTile = mercatorToTile(sw3857[0], ne3857[1], z);
+            const maxTile = mercatorToTile(ne3857[0], sw3857[1], z);
 
-            const maxTile =
-                mercatorToTile(
-                    ne3857[0],
-                    sw3857[1],
-                    z
-                );
+            minX = Math.min(minTile.x, maxTile.x);
+            maxX = Math.max(minTile.x, maxTile.x);
+            minY = Math.min(minTile.y, maxTile.y);
+            maxY = Math.max(minTile.y, maxTile.y);
 
-            minX = Math.min(
-                minTile.x,
-                maxTile.x
-            );
-
-            maxX = Math.max(
-                minTile.x,
-                maxTile.x
-            );
-
-            minY = Math.min(
-                minTile.y,
-                maxTile.y
-            );
-
-            maxY = Math.max(
-                minTile.y,
-                maxTile.y
-            );
-
-            tilesWide =
-                maxX - minX + 1;
-
-            tilesHigh =
-                maxY - minY + 1;
-
-            const tileCount =
-                tilesWide * tilesHigh;
+            tilesWide = maxX - minX + 1;
+            tilesHigh = maxY - minY + 1;
 
             const pixelCount =
-                tilesWide *
-                SWISSIMAGE_RGB.tileSize *
-                tilesHigh *
-                SWISSIMAGE_RGB.tileSize;
+                tilesWide * tileSize * tilesHigh * tileSize;
 
-            if (
-                tileCount <= MAX_RASTER_TILES &&
-                pixelCount <= MAX_RASTER_PIXELS
-            ) {
+            if (pixelCount <= MAX_RASTER_PIXELS) {
                 break;
             }
 
@@ -1902,111 +1825,189 @@ async function prepareSwissImageRaster() {
             z--;
         }
 
-        const canvas =
-            document.createElement("canvas");
+        const width = tilesWide * tileSize;
+        const height = tilesHigh * tileSize;
 
-        canvas.width =
-            tilesWide *
-            SWISSIMAGE_RGB.tileSize;
+        let rgb;
 
-        canvas.height =
-            tilesHigh *
-            SWISSIMAGE_RGB.tileSize;
-
-        const context =
-            canvas.getContext(
-                "2d",
-                {
-                    willReadFrequently: true
-                }
-            );
-
-        if (!context) {
+        try {
+            rgb = new Uint8Array(width * height * 3);
+        } catch (error) {
             throw new Error(
-                "Could not create raster canvas."
+                `Not enough memory for a ${width} x ${height} SWISSIMAGE raster. ` +
+                "Lower the SWISSIMAGE resolution."
             );
         }
 
+        // Tiles that cannot be loaded stay neutral grey.
+        rgb.fill(128);
+
+        const totalTiles = tilesWide * tilesHigh;
+
         setStatus(
-            `Loading SWISSIMAGE RGB at zoom ${z} ` +
-            `(${tilesWide} × ${tilesHigh} WMTS tiles)…`
+            `Loading SWISSIMAGE at zoom ${z} ` +
+            `(${tilesWide} × ${tilesHigh} tiles, ` +
+            `${width.toLocaleString()} × ${height.toLocaleString()} px)…`
         );
 
-        const requests = [];
+        const jobs = [];
 
         for (let y = minY; y <= maxY; y++) {
             for (let x = minX; x <= maxX; x++) {
-                requests.push(
-                    loadSwissImageTile(z, x, y)
-                        .then(image => {
-                            const px =
-                                (x - minX) *
-                                SWISSIMAGE_RGB.tileSize;
-
-                            const py =
-                                (y - minY) *
-                                SWISSIMAGE_RGB.tileSize;
-
-                            context.drawImage(
-                                image,
-                                px,
-                                py
-                            );
-                        })
-                );
+                jobs.push({ x, y });
             }
         }
 
-        await Promise.all(requests);
+        // One small canvas is reused to decode each tile.
+        const tileCanvas = document.createElement("canvas");
+        tileCanvas.width = tileSize;
+        tileCanvas.height = tileSize;
 
-        const topLeft =
-            tileToMercator(
-                minX,
-                minY,
-                z
-            );
+        const tileContext = tileCanvas.getContext(
+            "2d",
+            { willReadFrequently: true }
+        );
 
-        const bottomRight =
-            tileToMercator(
-                maxX + 1,
-                maxY + 1,
-                z
-            );
+        if (!tileContext) {
+            throw new Error("Could not create tile canvas.");
+        }
 
-        SWISSIMAGE_RGB.cache.clear();
+        let nextJob = 0;
+        let doneTiles = 0;
+        let failedTiles = 0;
+
+        const worker = async () => {
+            while (nextJob < jobs.length) {
+                const { x, y } = jobs[nextJob++];
+                const key = `${z}/${x}/${y}`;
+
+                let image = null;
+
+                try {
+                    image = await loadSwissImageTile(z, x, y);
+                } catch (firstError) {
+                    SWISSIMAGE_RGB.cache.delete(key);
+
+                    try {
+                        image = await loadSwissImageTile(z, x, y);
+                    } catch (secondError) {
+                        failedTiles++;
+                    }
+                }
+
+                if (image) {
+                    // No await between draw and copy, so the shared canvas is safe.
+                    tileContext.clearRect(0, 0, tileSize, tileSize);
+                    tileContext.drawImage(image, 0, 0, tileSize, tileSize);
+
+                    let data;
+
+                    try {
+                        data = tileContext.getImageData(
+                            0, 0, tileSize, tileSize
+                        ).data;
+                    } catch (error) {
+                        throw new Error(
+                            "SWISSIMAGE pixels cannot be read. " +
+                            "The WMTS image may not be CORS-enabled. " +
+                            `Original error: ${error.message}`
+                        );
+                    }
+
+                    const x0 = (x - minX) * tileSize;
+                    const y0 = (y - minY) * tileSize;
+
+                    for (let row = 0; row < tileSize; row++) {
+                        let dst = ((y0 + row) * width + x0) * 3;
+                        let src = row * tileSize * 4;
+
+                        for (let col = 0; col < tileSize; col++) {
+                            rgb[dst++] = data[src];
+                            rgb[dst++] = data[src + 1];
+                            rgb[dst++] = data[src + 2];
+                            src += 4;
+                        }
+                    }
+                }
+
+                // Do not keep decoded images around.
+                SWISSIMAGE_RGB.cache.delete(key);
+
+                doneTiles++;
+
+                if (doneTiles % 8 === 0 || doneTiles === totalTiles) {
+                    progressShown = true;
+
+                    showSwissImageProgress(
+                        doneTiles,
+                        totalTiles,
+                        "Loading SWISSIMAGE…"
+                    );
+                }
+            }
+        };
+
+        const concurrency = Math.min(12, jobs.length);
+
+        await Promise.all(
+            Array.from({ length: concurrency }, worker)
+        );
+
+        const topLeft = tileToMercator(minX, minY, z);
+        const bottomRight = tileToMercator(maxX + 1, maxY + 1, z);
+
+        const key = tileKey(currentTile, 0);
 
         const raster = {
-            tileKey: tileKey(currentTile, 0),
+            tileKey: key,
 
-            canvas,
-            context,
+            // Changes with the zoom, so nodes are recoloured when it changes.
+            id: `${key}@z${z}`,
+
+            requestedZoom,
+            z,
+            rgb,
 
             minX,
             minY,
             maxX,
             maxY,
-            z,
 
             worldMinX: topLeft.x,
             worldMaxY: topLeft.y,
             worldMaxX: bottomRight.x,
             worldMinY: bottomRight.y,
 
-            width: canvas.width,
-            height: canvas.height
+            width,
+            height
         };
 
+        SWISSIMAGE_RGB.cache.clear();
         SWISSIMAGE_RGB.raster = raster;
 
-        swissImageBlockCaches.delete(raster);
+        const metersPerPixel =
+            (raster.worldMaxX - raster.worldMinX) / width;
+
+        const lat = (south + north) / 2;
+        const groundCm =
+            metersPerPixel * Math.cos(lat * Math.PI / 180) * 100;
 
         setStatus(
             `SWISSIMAGE raster ready: ` +
-            `${raster.width.toLocaleString()} × ` +
-            `${raster.height.toLocaleString()} pixels.`
+            `${width.toLocaleString()} × ${height.toLocaleString()} px, ` +
+            `~${groundCm.toFixed(0)} cm/px` +
+            (z < requestedZoom
+                ? ` (zoom lowered from ${requestedZoom} to ${z} to fit memory)`
+                : "") +
+            (failedTiles ? `, ${failedTiles} tile(s) missing` : "") +
+            "."
         );
     } finally {
         SWISSIMAGE_RGB.loading = false;
+
+        if (progressShown) {
+            hideSwissImageProgress();
+        }
     }
 }
 
@@ -2105,136 +2106,33 @@ function tileToMercator(x, y, z) {
    RASTER PIXEL CACHE
    ============================================================ */
 
-function getSwissImagePixel(
-    raster,
-    x,
-    y
-) {
-    let cache =
-        swissImageBlockCaches.get(raster);
+const swissImagePixelOut = [128, 128, 128];
 
-    if (!cache) {
-        cache = new Map();
-        swissImageBlockCaches.set(
-            raster,
-            cache
-        );
-    }
-
-    const blockX =
-        Math.floor(
-            x / SWISSIMAGE_BLOCK_SIZE
-        );
-
-    const blockY =
-        Math.floor(
-            y / SWISSIMAGE_BLOCK_SIZE
-        );
-
-    const key =
-        `${blockX},${blockY}`;
-
-    let block = cache.get(key);
-
-    if (block) {
-        /*
-         * LRU refresh.
-         */
-        cache.delete(key);
-        cache.set(key, block);
-    } else {
-        const x0 =
-            blockX *
-            SWISSIMAGE_BLOCK_SIZE;
-
-        const y0 =
-            blockY *
-            SWISSIMAGE_BLOCK_SIZE;
-
-        const width =
-            Math.min(
-                SWISSIMAGE_BLOCK_SIZE,
-                raster.width - x0
-            );
-
-        const height =
-            Math.min(
-                SWISSIMAGE_BLOCK_SIZE,
-                raster.height - y0
-            );
-
-        if (
-            width <= 0 ||
-            height <= 0
-        ) {
-            return [128, 128, 128];
-        }
-
-        let imageData;
-
-        try {
-            imageData =
-                raster.context.getImageData(
-                    x0,
-                    y0,
-                    width,
-                    height
-                );
-        } catch (error) {
-            throw new Error(
-                "SWISSIMAGE pixels cannot be read. " +
-                "The WMTS image may not be CORS-enabled. " +
-                `Original error: ${error.message}`
-            );
-        }
-
-        block = {
-            x0,
-            y0,
-            width,
-            height,
-            data: imageData.data
-        };
-
-        cache.set(key, block);
-
-        if (
-            cache.size >
-            SWISSIMAGE_MAX_CACHED_BLOCKS
-        ) {
-            cache.delete(
-                cache.keys().next().value
-            );
-        }
-    }
-
-    const localX =
-        x - block.x0;
-
-    const localY =
-        y - block.y0;
+/*
+ * Returns [r, g, b] for raster pixel (x, y). The returned array is
+ * reused for every call - read it immediately, do not store it.
+ */
+function getSwissImagePixel(raster, x, y) {
+    const out = swissImagePixelOut;
 
     if (
-        localX < 0 ||
-        localY < 0 ||
-        localX >= block.width ||
-        localY >= block.height
+        x < 0 ||
+        y < 0 ||
+        x >= raster.width ||
+        y >= raster.height
     ) {
-        return [128, 128, 128];
+        out[0] = out[1] = out[2] = 128;
+        return out;
     }
 
-    const offset =
-        (
-            localY *
-            block.width +
-            localX
-        ) * 4;
+    const p = (y * raster.width + x) * 3;
+    const rgb = raster.rgb;
 
-    return [
-        block.data[offset],
-        block.data[offset + 1],
-        block.data[offset + 2]
-    ];
+    out[0] = rgb[p];
+    out[1] = rgb[p + 1];
+    out[2] = rgb[p + 2];
+
+    return out;
 }
 
 /* ============================================================
@@ -2438,7 +2336,7 @@ function yieldToBrowser() {
        const position = geometry?.attributes?.position;
        const raster = SWISSIMAGE_RGB.raster;
 
-       if (!geometry || !position || !raster?.context) {
+       if (!geometry || !position || !raster?.rgb) {
            return false;
        }
 
@@ -2726,6 +2624,7 @@ async function colorVisiblePointNodes(
     }
 
     const rasterKey =
+        SWISSIMAGE_RGB.raster.id ||
         SWISSIMAGE_RGB.raster.tileKey ||
         "current-raster";
 

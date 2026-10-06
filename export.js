@@ -36,6 +36,7 @@
         'AUTHORITY["EPSG","2056"]]';
 
     let exporting = false;
+    let colourNote = "";
     let abortRequested = false;
 
     const el = id => document.getElementById(id);
@@ -281,6 +282,8 @@
         if (!raster?.rgb) {
             throw new Error("SWISSIMAGE raster is not available.");
         }
+
+        colourNote = swissTileNote(raster);
 
         const pixels = raster.rgb;
 
@@ -882,6 +885,7 @@
 
         exporting = true;
         abortRequested = false;
+        colourNote = "";
         window.updateExportButtons();
 
         const started = performance.now();
@@ -902,7 +906,9 @@
             const seconds = Math.round((performance.now() - started) / 1000);
             const message =
                 `Exported ${writer.count.toLocaleString()} points ` +
-                `(${formatBytes(result.size)}) as ${result.location} in ${seconds} s.`;
+                `(${formatBytes(result.size)}) as ${result.location} in ${seconds} s` +
+                (useRgb ? colourNote : "") +
+                ".";
 
             setStatus(message);
             setExportInfo(message);

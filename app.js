@@ -1820,7 +1820,7 @@ function swissImageFrame() {
                 break;
             }
 
-            colorNodeSync(sceneNode, raster, mapper);
+            colorNodeSync(sceneNode, raster, mapper, node);
         }
     }
 
@@ -1844,7 +1844,7 @@ function swissImageFrame() {
                 return false;   // stop, continue next frame
             }
 
-            colorNodeSync(sceneNode, raster, mapper);
+            colorNodeSync(sceneNode, raster, mapper, node);
             return true;
         });
 
@@ -1866,12 +1866,24 @@ function swissImageFrame() {
             (outside > 1
                 ? ` (${outside.toFixed(1)} % of points fall outside the raster)`
                 : "") +
-            (raster.failedTiles
-                ? `; ${raster.failedTiles} map tile(s) could not be loaded`
-                : "") +
+            swissTileNote(raster) +
             "."
         );
     }
+}
+
+function swissTileNote(raster) {
+    const parts = [];
+
+    if (raster.fallbackTiles) {
+        parts.push(`${raster.fallbackTiles} map tile(s) were taken from a lower zoom`);
+    }
+
+    if (raster.failedTiles) {
+        parts.push(`${raster.failedTiles} map tile(s) could not be loaded (grey)`);
+    }
+
+    return parts.length ? `; ${parts.join(", ")}` : "";
 }
 
 /*
@@ -1940,7 +1952,7 @@ function installSwissNodeHook(pointcloud) {
                 const sceneNode = node?.sceneNode;
 
                 if (swissNodeNeedsColor(sceneNode, raster)) {
-                    colorNodeSync(sceneNode, raster, getSwissMapper(raster));
+                    colorNodeSync(sceneNode, raster, getSwissMapper(raster), node);
                 }
             }
         } catch (error) {
@@ -2093,6 +2105,7 @@ async function prepareSwissImageRaster() {
         let nextJob = 0;
         let doneTiles = 0;
         let failedTiles = 0;
+        let fallbackTiles = 0;
 
         const worker = async () => {
             while (nextJob < jobs.length) {
@@ -2103,13 +2116,13 @@ async function prepareSwissImageRaster() {
 
                 // swisstopo can answer with errors when many tiles are
                 // requested at once, so retry with a growing pause.
-                for (let attempt = 0; attempt < 4 && !image; attempt++) {
+                for (let attempt = 0; attempt < 5 && !image; attempt++) {
                     try {
                         image = await loadSwissImageTile(z, x, y);
                     } catch (error) {
                         SWISSIMAGE_RGB.cache.delete(key);
 
-                        if (attempt < 3) {
+                        if (attempt < 4) {
                             await new Promise(resolve =>
                                 setTimeout(resolve, 400 * (attempt + 1) * (attempt + 1))
                             );
@@ -2117,28 +2130,38 @@ async function prepareSwissImageRaster() {
                     }
                 }
 
-                if (!image) {
-                    failedTiles++;
+                // No await between draw and copy, so the shared canvas is safe.
+                let data = null;
+
+                try {
+                    if (image) {
+                        tileContext.clearRect(0, 0, tileSize, tileSize);
+                        tileContext.drawImage(image, 0, 0, tileSize, tileSize);
+                        data = tileContext.getImageData(0, 0, tileSize, tileSize).data;
+                    }
+                } catch (error) {
+                    throw new Error(
+                        "SWISSIMAGE pixels cannot be read. " +
+                        "The WMTS image may not be CORS-enabled. " +
+                        `Original error: ${error.message}`
+                    );
                 }
 
-                if (image) {
-                    // No await between draw and copy, so the shared canvas is safe.
-                    tileContext.clearRect(0, 0, tileSize, tileSize);
-                    tileContext.drawImage(image, 0, 0, tileSize, tileSize);
+                // Still nothing: use the same area from a lower zoom
+                // (blurrier, but coloured instead of grey).
+                if (!data) {
+                    data = await swissTileFromParent(
+                        z, x, y, tileContext, tileSize
+                    );
 
-                    let data;
-
-                    try {
-                        data = tileContext.getImageData(
-                            0, 0, tileSize, tileSize
-                        ).data;
-                    } catch (error) {
-                        throw new Error(
-                            "SWISSIMAGE pixels cannot be read. " +
-                            "The WMTS image may not be CORS-enabled. " +
-                            `Original error: ${error.message}`
-                        );
+                    if (data) {
+                        fallbackTiles++;
+                    } else {
+                        failedTiles++;
                     }
+                }
+
+                if (data) {
 
                     const x0 = (x - minX) * tileSize;
                     const y0 = (y - minY) * tileSize;
@@ -2207,7 +2230,8 @@ async function prepareSwissImageRaster() {
             width,
             height,
 
-            failedTiles
+            failedTiles,
+            fallbackTiles
         };
 
         SWISSIMAGE_RGB.cache.clear();
@@ -2227,7 +2251,7 @@ async function prepareSwissImageRaster() {
             (z < requestedZoom
                 ? ` (zoom lowered from ${requestedZoom} to ${z} to fit memory)`
                 : "") +
-            (failedTiles ? `, ${failedTiles} tile(s) missing` : "") +
+            swissTileNote(raster) +
             "."
         );
     } finally {
@@ -2280,6 +2304,54 @@ function loadSwissImageTile(z, x, y) {
     );
 
     return promise;
+}
+
+/*
+ * Pixels (RGBA, tileSize x tileSize) for tile z/x/y taken from the first
+ * lower zoom level that can be loaded, or null.
+ */
+async function swissTileFromParent(z, x, y, context, tileSize) {
+    for (let dz = 1; dz <= 4 && z - dz >= 0; dz++) {
+        const factor = 1 << dz;
+        const px = x >> dz;
+        const py = y >> dz;
+        const key = `${z - dz}/${px}/${py}`;
+
+        let image = null;
+
+        for (let attempt = 0; attempt < 2 && !image; attempt++) {
+            try {
+                image = await loadSwissImageTile(z - dz, px, py);
+            } catch (error) {
+                SWISSIMAGE_RGB.cache.delete(key);
+            }
+        }
+
+        if (!image) {
+            continue;
+        }
+
+        const size = tileSize / factor;
+
+        context.clearRect(0, 0, tileSize, tileSize);
+        context.drawImage(
+            image,
+            (x & (factor - 1)) * size,
+            (y & (factor - 1)) * size,
+            size,
+            size,
+            0,
+            0,
+            tileSize,
+            tileSize
+        );
+
+        SWISSIMAGE_RGB.cache.delete(key);
+
+        return context.getImageData(0, 0, tileSize, tileSize).data;
+    }
+
+    return null;
 }
 
 /* ============================================================
@@ -2646,7 +2718,135 @@ function getSwissMapper(raster) {
    COLOR ONE POTREE NODE (synchronous)
    ============================================================ */
 
-function colorNodeSync(sceneNode, raster, mapper) {
+const swissMatrixScratch = new THREE.Matrix4();
+
+/*
+ * Node-local point -> world (LV95) matrix.
+ *
+ * Potree draws a node with  pointcloud.matrixWorld x translate(node box min).
+ * Asking three.js for sceneNode.matrixWorld instead can stack the parent
+ * nodes' translations on top and place deep nodes far from where they really
+ * are - they then fall outside the SWISSIMAGE raster and stay grey.
+ *
+ * So several candidate matrices are tried, and the one that puts a handful of
+ * the node's points inside the node's own bounding box is used.
+ */
+function resolveSwissNodeMatrix(sceneNode, treeNode, mapper, position, count) {
+    const pointcloud = currentPointCloud;
+    const array = position.array;
+    const itemSize = position.itemSize || 3;
+    const samples = [0, count >> 2, count >> 1, (3 * count) >> 2, count - 1];
+
+    let expected = null;
+    let tolerance = 1;
+
+    const nodeBox = treeNode?.geometryNode?.boundingBox;
+
+    if (nodeBox && pointcloud?.matrixWorld) {
+        expected = nodeBox.clone().applyMatrix4(pointcloud.matrixWorld);
+
+        tolerance = Math.max(
+            1,
+            0.02 * Math.max(
+                expected.max.x - expected.min.x,
+                expected.max.y - expected.min.y
+            )
+        );
+    }
+
+    const fits = e => {
+        for (const index of samples) {
+            const j = index * itemSize;
+            const x = array[j];
+            const y = array[j + 1];
+            const z = itemSize >= 3 ? array[j + 2] : 0;
+
+            const wx = e[0] * x + e[4] * y + e[8] * z + e[12];
+            const wy = e[1] * x + e[5] * y + e[9] * z + e[13];
+            const wz = e[2] * x + e[6] * y + e[10] * z + e[14];
+
+            if (expected) {
+                if (
+                    wx < expected.min.x - tolerance || wx > expected.max.x + tolerance ||
+                    wy < expected.min.y - tolerance || wy > expected.max.y + tolerance ||
+                    wz < expected.min.z - tolerance || wz > expected.max.z + tolerance
+                ) {
+                    return false;
+                }
+            } else if (
+                wx < mapper.minE - 150 || wx > mapper.maxE + 150 ||
+                wy < mapper.minN - 150 || wy > mapper.maxN + 150
+            ) {
+                return false;
+            }
+        }
+
+        return true;
+    };
+
+    const candidates = {
+        // matrix Potree itself already stored for rendering
+        D: () => sceneNode.matrixWorld.elements,
+
+        // Potree's convention: point-cloud matrix x node position
+        A: () => {
+            sceneNode.updateMatrix();
+            return swissMatrixScratch.multiplyMatrices(
+                pointcloud.matrixWorld,
+                sceneNode.matrix
+            ).elements;
+        },
+
+        // positions already in point-cloud space
+        E: () => pointcloud.matrixWorld.elements,
+
+        // plain three.js parent chain
+        C: () => {
+            sceneNode.updateMatrixWorld(true);
+            return sceneNode.matrixWorld.elements;
+        }
+    };
+
+    const cached = pointcloud.__swissMatrixMethod;
+    const order = ["D", "A", "E", "C"];
+
+    if (cached) {
+        order.splice(order.indexOf(cached), 1);
+        order.unshift(cached);
+    }
+
+    const stats = SWISSIMAGE_RGB.matrixStats ??= { D: 0, A: 0, E: 0, C: 0, none: 0 };
+
+    for (const name of order) {
+        let elements;
+
+        try {
+            elements = candidates[name]();
+        } catch (error) {
+            continue;
+        }
+
+        if (elements && fits(elements)) {
+            pointcloud.__swissMatrixMethod = name;
+            stats[name]++;
+            return Array.from(elements);
+        }
+    }
+
+    stats.none++;
+
+    if (stats.none <= 3) {
+        console.warn(
+            "[swiss-copc] no node matrix put the points inside the node box; " +
+            "using Potree's convention.",
+            { expected, tolerance }
+        );
+    }
+
+    return Array.from(candidates.A());
+}
+
+function colorNodeSync(sceneNode, raster, mapper, treeNode) {
     const geometry = sceneNode.geometry;
     const position = geometry.attributes.position;
     const count = position.count;
@@ -2657,16 +2857,11 @@ function colorNodeSync(sceneNode, raster, mapper) {
     const color = ensureSwissImageColorAttribute(geometry, count);
 
     if (!color) {
-        // nothing we can write to - do not retry every frame
-        geometry.userData.swissImageColoredFor = raster.id;
+        // not there (yet): leave the node unmarked so it is tried again
         return;
     }
 
-    if (typeof sceneNode.updateMatrixWorld === "function") {
-        sceneNode.updateMatrixWorld(true);
-    }
-
-    const e = sceneNode.matrixWorld.elements;
+    const e = resolveSwissNodeMatrix(sceneNode, treeNode, mapper, position, count);
 
     const positions = position.array;
     const itemSize = position.itemSize || 3;
@@ -3010,6 +3205,10 @@ window.swissCOPC = {
     // { points, outside }: how many coloured points fell outside the raster
     swissStats:
         () => SWISSIMAGE_RGB.raster?.stats,
+
+    // which node-matrix variant was used, e.g. { D: 0, A: 412, E: 0, C: 0, none: 0 }
+    swissMatrixStats:
+        () => SWISSIMAGE_RGB.matrixStats,
 
     createHorizontalSection:
         () => createSection("horizontal"),

@@ -1692,6 +1692,8 @@ function createSection(type) {
             ? "Horizontal section enabled."
             : "Vertical section enabled."
     );
+
+    window.usageCounter?.hit("sections");
 }
 
 function createSectionControls() {
@@ -3400,6 +3402,8 @@ function downloadCurrentTile() {
     setStatus(
         "COPC URL opened in a new tab."
     );
+
+    window.usageCounter?.hit("downloads");
 }
 
 /* ============================================================

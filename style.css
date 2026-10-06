@@ -430,6 +430,34 @@ output { float: right; color: #c4c4c4; font-variant-numeric: tabular-nums; }
 .readme-inner .close { position: absolute; top: 16px; right: 16px; }
 
 
+/* ---------- Usage counters (About dialog) ---------- */
+
+.stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    margin: 8px 0 6px;
+}
+.stats > div {
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--field);
+}
+.stats dt { color: var(--muted); font-size: 11px; }
+.stats dd {
+    margin: 4px 0 0;
+    font-size: 20px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+}
+.stat-note { margin: 0; color: var(--muted); font-size: 11px; }
+
+@media (max-width: 520px) {
+    .stats { grid-template-columns: 1fr; }
+}
+
+
 /* ---------- Scrollbars ---------- */
 
 .dock::-webkit-scrollbar,

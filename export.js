@@ -914,6 +914,8 @@
 
             setStatus(message);
             setExportInfo(message);
+
+            window.usageCounter?.hit("downloads");
         } catch (error) {
             console.error("[export]", error);
             setStatus(`Export failed: ${error.message}`);

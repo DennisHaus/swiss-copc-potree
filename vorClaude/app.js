@@ -1,4 +1,4 @@
-// (the original first line was `code = "use strict";`, which only created a global variable)
+code = "use strict";
 
 /*
  * SwissTopo swissSURFACE3D COPC viewer
@@ -18,6 +18,7 @@
  *   CONFIG, Potree, THREE (provided by Potree), L, proj4
  */
 
+ setStatus("d_32");
 
 
 
@@ -347,10 +348,6 @@ function updateControlState() {
     if (colorMode) {
         colorMode.disabled = !hasPointCloud;
     }
-
-    if (typeof window.updateExportButtons === "function") {
-        window.updateExportButtons();
-    }
 }
 
 /* ============================================================
@@ -547,7 +544,6 @@ function renderTileInList(tile, index) {
 
     item.type = "button";
     item.className = "tile-item";
-    item.dataset.key = tileKey(tile, index);
 
     item.textContent =
         tile?.properties?.title ||
@@ -582,10 +578,6 @@ function selectTile(tile, index = 0) {
     }
 
     selectedTileKey = key;
-
-    document.querySelectorAll("#tile-list .tile-item").forEach(el => {
-        el.classList.toggle("selected", el.dataset.key === key);
-    });
 
     const layer = tileLayers.get(key);
 
@@ -635,7 +627,7 @@ function selectTile(tile, index = 0) {
 function updateSelectedPanel(tile) {
     const title = getEl("selected-title");
     const info = getEl("selected-info");
-    const attributes = getEl("asset-list");
+    const attributes = getEl("selected-attributes");
 
     const tileName =
         tile?.properties?.title ||
@@ -844,11 +836,6 @@ function configurePointCloud(pointcloud) {
 
     applyColorMode(pointcloud, "intensity");
     refreshPointCloudMaterial(pointcloud);
-
-    // Apply the user's appearance settings (point size, shape, opacity, ...).
-    if (typeof window.applyAppearance === "function") {
-        window.applyAppearance(pointcloud);
-    }
 }
 
 function refreshPointCloudMaterial(pointcloud) {
@@ -2816,145 +2803,81 @@ async function colorVisiblePointNodes(
    PLACE SEARCH
    ============================================================ */
 
-/*
- * swisstopo SearchServer origins:
- *   gg25     municipalities
- *   zipcode  postcodes / localities (Ortschaften)
- *   gazetteer  place names (settlements, hills, lakes, ...)
- *   address  street addresses
- */
-const SEARCH_SCOPES = {
-    all: "gg25,zipcode,gazetteer,address",
-    places: "gg25,zipcode,gazetteer",
-    addresses: "address"
-};
-
-const SEARCH_ORIGIN_INFO = {
-    gg25: { label: "Municipality", order: 0, zoom: 13 },
-    zipcode: { label: "Locality", order: 1, zoom: 14 },
-    gazetteer: { label: "Place", order: 2, zoom: 15 },
-    address: { label: "Address", order: 3, zoom: 18 },
-    district: { label: "District", order: 0, zoom: 12 },
-    kantone: { label: "Canton", order: 0, zoom: 10 }
-};
-
-function stripHtml(value) {
-    return String(value ?? "").replace(/<[^>]*>/g, "").trim();
-}
-
 async function searchPlace() {
-    const input = getEl("search-input");
+    const input =
+        getEl("search-input");
 
     if (!input) {
         return;
     }
 
-    const query = input.value.trim();
+    const query =
+        input.value.trim();
 
     if (!query) {
         return;
     }
 
-    const scope = getEl("search-scope")?.value || "all";
-
-    setStatus(`Searching for ${query}…`);
+    setStatus(
+        `Searching for ${query}…`
+    );
 
     try {
-        const url = new URL(CONFIG.SEARCH_URL);
+        const url =
+            new URL(CONFIG.SEARCH_URL);
 
-        url.searchParams.set("searchText", query);
-        url.searchParams.set("type", "locations");
-        url.searchParams.set("origins", SEARCH_SCOPES[scope] || SEARCH_SCOPES.all);
-        url.searchParams.set("sr", "2056");
-        url.searchParams.set("limit", scope === "all" ? "20" : "10");
+        url.searchParams.set(
+            "searchText",
+            query
+        );
 
-        const response = await fetch(url);
+        url.searchParams.set(
+            "type",
+            "locations"
+        );
+
+        url.searchParams.set(
+            "origins",
+            "address"
+        );
+
+        url.searchParams.set(
+            "limit",
+            "5"
+        );
+
+        const response =
+            await fetch(url);
 
         if (!response.ok) {
-            throw new Error(`Search failed: ${response.status}`);
+            throw new Error(
+                `Search failed: ${response.status}`
+            );
         }
 
-        const data = await response.json();
-        const results = (data.results || [])
-            .map((result, index) => ({ result, index }))
-            .sort((a, b) => {
-                const oa = SEARCH_ORIGIN_INFO[a.result.attrs?.origin]?.order ?? 9;
-                const ob = SEARCH_ORIGIN_INFO[b.result.attrs?.origin]?.order ?? 9;
-                return oa - ob || a.index - b.index;
-            })
-            .map(item => item.result);
+        const data =
+            await response.json();
+
+        const results =
+            data.results || [];
 
         renderSearchResults(results);
 
-        setStatus(`${results.length} search result(s).`);
+        setStatus(
+            `${results.length} search result(s).`
+        );
     } catch (error) {
         console.error(error);
-        setStatus(`Place search failed: ${error.message}`);
-    }
-}
 
-/* "BOX(2683000 1247000,2684000 1248000)" (LV95) -> Leaflet bounds, or null. */
-function boxToLatLngBounds(text) {
-    const numbers = String(text || "").match(/-?\d+(\.\d+)?/g);
-
-    if (!numbers || numbers.length < 4) {
-        return null;
-    }
-
-    const [x1, y1, x2, y2] = numbers.map(Number);
-
-    const inSwitzerland = ([lon, lat]) =>
-        lon > 5.5 && lon < 11 && lat > 45.5 && lat < 48.2;
-
-    const convert = (a, b) => proj4("EPSG:2056", "EPSG:4326", [a, b]);
-
-    for (const swap of [false, true]) {
-        const p1 = swap ? convert(y1, x1) : convert(x1, y1);
-        const p2 = swap ? convert(y2, x2) : convert(x2, y2);
-
-        if (inSwitzerland(p1) && inSwitzerland(p2)) {
-            return L.latLngBounds(
-                [p1[1], p1[0]],
-                [p2[1], p2[0]]
-            );
-        }
-    }
-
-    return null;
-}
-
-function goToSearchResult(result) {
-    const attrs = result.attrs || {};
-    const info = SEARCH_ORIGIN_INFO[attrs.origin] || { zoom: 14 };
-
-    const lat = Number(attrs.lat ?? result.lat);
-    const lon = Number(attrs.lon ?? result.lon);
-
-    if (!map) {
-        return;
-    }
-
-    // Prefer the object's extent (municipalities, localities); addresses are points.
-    if (attrs.origin !== "address") {
-        try {
-            const bounds = boxToLatLngBounds(attrs.geom_st_box2d);
-
-            if (bounds && bounds.isValid() && !bounds.getSouthWest().equals(bounds.getNorthEast())) {
-                map.fitBounds(bounds.pad(0.1), { maxZoom: 16 });
-                return;
-            }
-        } catch (error) {
-            console.warn("Could not use search extent:", error);
-        }
-    }
-
-    if (Number.isFinite(lat) && Number.isFinite(lon)) {
-        map.setView([lat, lon], info.zoom);
+        setStatus(
+            `Place search failed: ${error.message}`
+        );
     }
 }
 
 function renderSearchResults(results) {
-    const container = getEl("search-results");
+    const container =
+        getEl("search-results");
 
     if (!container) {
         return;
@@ -2962,38 +2885,48 @@ function renderSearchResults(results) {
 
     container.innerHTML = "";
 
-    if (!results.length) {
-        const empty = document.createElement("div");
-        empty.className = "search-empty";
-        empty.textContent = "No match. Try another spelling or search in “Everything”.";
-        container.appendChild(empty);
-        return;
-    }
-
     for (const result of results) {
-        const attrs = result.attrs || {};
-        const item = document.createElement("button");
+        const item =
+            document.createElement("button");
 
         item.type = "button";
-        item.className = "search-result";
 
-        const origin = document.createElement("span");
-        origin.className = "origin";
-        origin.textContent =
-            SEARCH_ORIGIN_INFO[attrs.origin]?.label ||
-            attrs.origin ||
-            "";
+        const attrs =
+            result.attrs || {};
 
-        const label = document.createElement("span");
-        label.textContent = stripHtml(
+        item.textContent =
             attrs.label ||
             attrs.detail ||
             result.label ||
-            "Location"
-        );
+            "Location";
 
-        item.append(origin, label);
-        item.addEventListener("click", () => goToSearchResult(result));
+        item.addEventListener(
+            "click",
+            () => {
+                const lat =
+                    Number(
+                        attrs.lat ||
+                        result.lat
+                    );
+
+                const lon =
+                    Number(
+                        attrs.lon ||
+                        result.lon
+                    );
+
+                if (
+                    map &&
+                    Number.isFinite(lat) &&
+                    Number.isFinite(lon)
+                ) {
+                    map.setView(
+                        [lat, lon],
+                        14
+                    );
+                }
+            }
+        );
 
         container.appendChild(item);
     }

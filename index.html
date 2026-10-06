@@ -12,6 +12,8 @@
 
     <title>Swiss LiDAR Viewer</title>
 
+    <meta name="author" content="Dennis Häusler, ETH Zürich, Professur Voser">
+
 
     <!-- =====================================================
          POTREE
@@ -72,369 +74,295 @@
 
 <body>
 
-<div id="app">
+<div id="app" class="left-open right-open">
 
-
-    <!-- =====================================================
-         POTREE VIEWER
-         ===================================================== -->
-
+    <!-- Potree viewer -->
     <div id="potree-container">
-
         <div id="potree_render_area"></div>
-
     </div>
 
+    <!-- Top bar -->
+    <header id="topbar">
+        <button id="toggle-left" type="button" class="icon-btn" title="Show / hide map and tiles" aria-pressed="true">Map</button>
 
-    <!-- =====================================================
-         MAP
-         ===================================================== -->
-
-    <div id="map"></div>
-
-
-    <!-- =====================================================
-         TOP BAR
-         ===================================================== -->
-
-    <div id="topbar">
-
-        <div class="brand">
-            Swiss LiDAR Viewer
-        </div>
-
-        <div class="brand-subtitle">
-            swissSURFACE3D / COPC
-        </div>
-
+        <div class="brand">Swiss LiDAR Viewer</div>
+        <div class="brand-subtitle">swissSURFACE3D / COPC</div>
 
         <div class="top-actions">
-
-            <button
-                id="findTilesButton"
-                type="button"
-            >
-                Find Tiles
-            </button>
-
-
-            <button
-                id="fitButton"
-                type="button"
-            >
-                Fit
-            </button>
-
-
-            <button
-                id="clearButton"
-                type="button"
-            >
-                Clear
-            </button>
-
+            <button id="findTilesButton" type="button" class="primary">Find tiles</button>
+            <button id="fitButton" type="button">Fit</button>
+            <button id="clearButton" type="button">Clear</button>
+            <button id="readme-button" type="button">About</button>
+            <button id="toggle-right" type="button" class="icon-btn" title="Show / hide controls" aria-pressed="true">Controls</button>
         </div>
+    </header>
 
-    </div>
+    <!-- Left dock: map, search, tiles -->
+    <aside id="dock-left" class="dock">
 
-
-    <!-- =====================================================
-         TILE PANEL
-         ===================================================== -->
-
-    <div id="tile-panel">
-
-        <div class="panel-header">
-
-            <h2>
-                LiDAR Tiles
-            </h2>
-
-            <span id="tile-count">
-                0
-            </span>
-
-        </div>
-
-
-        <div class="search-row">
-
-            <input
-                id="search-input"
-                type="text"
-                placeholder="Search Swiss place..."
-                autocomplete="off"
-            >
-
-            <button
-                id="search-button"
-                type="button"
-            >
-                Search
-            </button>
-
-        </div>
-
-
-        <div id="search-results"></div>
-
-
-        <div class="help">
-
-            <strong>
-                Tile search
-            </strong>
-
-            <p>
-                Move or zoom the map to find available
-                swissSURFACE3D tiles.
-            </p>
-
-        </div>
-
-
-        <div id="tile-list"></div>
-
-    </div>
-
-
-    <!-- =====================================================
-         SELECTED TILE PANEL
-         ===================================================== -->
-
-    <div id="selected-panel">
-
-
-        <div id="selected-title">
-            No tile selected
-        </div>
-
-
-        <div id="selected-info">
-            Select a LiDAR tile from the map or tile list.
-        </div>
-
-
-        <!-- =================================================
-             ATTRIBUTES
-             ================================================= -->
-
-        <div
-            id="selected-attributes"
-            class="attribute-panel"
-        >
-
-            <div class="section-heading">
-                Point-cloud attributes
-            </div>
-
-
-            <div id="attribute-list">
-
-                <div class="attribute-empty">
-                    No point cloud loaded.
+        <details class="fold" id="fold-map" open>
+            <summary>Map and search</summary>
+            <div class="fold-body">
+                <div class="search-row">
+                    <input id="search-input" type="text" placeholder="Place, municipality, postcode, street…" autocomplete="off">
+                    <button id="search-button" type="button">Search</button>
                 </div>
 
+                <div class="search-options">
+                    <label for="search-scope">Search in</label>
+                    <select id="search-scope">
+                        <option value="all">Everything</option>
+                        <option value="places">Localities and municipalities</option>
+                        <option value="addresses">Street addresses</option>
+                    </select>
+                    <button id="map-expand" type="button" title="Make the dock wider">Wide</button>
+                </div>
+
+                <div id="search-results"></div>
+
+                <div id="map-wrap">
+                    <div id="map"></div>
+                </div>
+
+                <p class="hint">Move or zoom the map, then press <em>Find tiles</em> to list the swissSURFACE3D tiles in view.</p>
             </div>
+        </details>
 
-        </div>
-
-
-        <!-- =================================================
-             DISPLAY
-             ================================================= -->
-
-        <div class="display-section">
-
-            <div class="section-heading">
-                Display
+        <details class="fold fold-grow" id="fold-tiles" open>
+            <summary>Tiles <span id="tile-count" class="badge">0</span></summary>
+            <div class="fold-body no-pad">
+                <div id="tile-list"></div>
             </div>
+        </details>
 
+    </aside>
 
-            <label
-                for="color-mode"
-                class="control-label"
-            >
-                Color by
-            </label>
+    <!-- Right dock: tile, display, appearance, sections, export -->
+    <aside id="dock-right" class="dock">
 
+        <details class="fold" open>
+            <summary>Selected tile</summary>
+            <div class="fold-body">
+                <div id="selected-title">No tile selected</div>
+                <div id="selected-info">Select a tile on the map or in the tile list.</div>
 
-            <select id="color-mode">
-    <option value="swissimage">SWISSIMAGE RGB</option>
-    <option value="intensity">Intensity</option>
-    <option value="classification">Classification</option>
-    <option value="return-number">Return Number</option>
-    <option value="number-of-returns">Number of Returns</option>
-    <option value="source-id">Source ID</option>
-</select>
+                <div class="selected-actions">
+                    <button id="load-button" type="button" disabled>Load</button>
+                    <button id="unload-button" type="button" disabled>Unload</button>
+                    <button id="download-button" type="button" disabled title="Open the original COPC file URL">Original file</button>
+                </div>
 
+                <details class="subfold">
+                    <summary>Point attributes</summary>
+                    <div id="attribute-list"><div class="attribute-empty">No point cloud loaded.</div></div>
+                </details>
 
-        </div>
-
-
-        <!-- =================================================
-             SECTION TOOLS
-             ================================================= -->
-
-        <div class="section-tools">
-
-            <div class="section-heading">
-                Sections
+                <details class="subfold">
+                    <summary>Tile assets</summary>
+                    <div id="asset-list"></div>
+                </details>
             </div>
+        </details>
 
-
-            <div class="section-buttons">
-
-                <button
-                    id="horizontal-section-button"
-                    type="button"
-                    disabled
-                >
-                    Horizontal
-                </button>
-
-
-                <button
-                    id="vertical-section-button"
-                    type="button"
-                    disabled
-                >
-                    Vertical
-                </button>
-
-
-                <button
-                    id="clear-section-button"
-                    type="button"
-                    disabled
-                >
-                    Clear
-                </button>
-
+        <details class="fold" open>
+            <summary>Colour</summary>
+            <div class="fold-body">
+                <label for="color-mode" class="control-label">Colour points by</label>
+                <select id="color-mode">
+                    <option value="swissimage">SWISSIMAGE RGB</option>
+                    <option value="intensity">Intensity</option>
+                    <option value="classification">Classification</option>
+                    <option value="elevation">Elevation</option>
+                    <option value="return-number">Return number</option>
+                    <option value="number-of-returns">Number of returns</option>
+                    <option value="source-id">Source ID</option>
+                </select>
             </div>
+        </details>
 
+        <details class="fold" open>
+            <summary>Appearance</summary>
+            <div class="fold-body">
 
-            <div
-                id="section-info"
-                class="section-info"
-            >
-                Load a point cloud to create sections.
+                <div class="ctrl">
+                    <label for="ap-budget">Max. points in view <output id="ap-budget-out"></output></label>
+                    <input id="ap-budget" type="range" min="0.5" max="50" step="0.5">
+                </div>
+
+                <div class="ctrl">
+                    <label for="ap-size">Point size <output id="ap-size-out"></output></label>
+                    <input id="ap-size" type="range" min="0.1" max="8" step="0.1">
+                </div>
+
+                <div class="ctrl two">
+                    <div>
+                        <label for="ap-sizetype">Size mode</label>
+                        <select id="ap-sizetype">
+                            <option value="ADAPTIVE">Adaptive</option>
+                            <option value="ATTENUATED">Attenuated</option>
+                            <option value="FIXED">Fixed</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="ap-shape">Shape</label>
+                        <select id="ap-shape">
+                            <option value="CIRCLE">Circle</option>
+                            <option value="SQUARE">Square</option>
+                            <option value="PARABOLOID">Paraboloid</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="ctrl">
+                    <label for="ap-opacity">Opacity <output id="ap-opacity-out"></output></label>
+                    <input id="ap-opacity" type="range" min="0.1" max="1" step="0.05">
+                </div>
+
+                <div class="ctrl">
+                    <label for="ap-fov">Field of view <output id="ap-fov-out"></output></label>
+                    <input id="ap-fov" type="range" min="20" max="100" step="1">
+                </div>
+
+                <div class="ctrl check">
+                    <input id="ap-edl" type="checkbox">
+                    <label for="ap-edl">Eye-dome lighting (depth shading)</label>
+                </div>
+
+                <div class="ctrl">
+                    <label for="ap-edl-strength">EDL strength <output id="ap-edl-strength-out"></output></label>
+                    <input id="ap-edl-strength" type="range" min="0" max="3" step="0.1">
+                </div>
+
+                <div class="ctrl two">
+                    <div>
+                        <label for="ap-bg">Background</label>
+                        <select id="ap-bg">
+                            <option value="#000000">Black</option>
+                            <option value="#1b1f23">Charcoal</option>
+                            <option value="#8a9096">Grey</option>
+                            <option value="#ffffff">White</option>
+                            <option value="gradient">Gradient</option>
+                            <option value="custom">Custom…</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="ap-bg-color">Custom colour</label>
+                        <input id="ap-bg-color" type="color" value="#101418">
+                    </div>
+                </div>
+
+                <button id="ap-reset" type="button" class="wide">Reset appearance</button>
             </div>
+        </details>
 
-        </div>
+        <details class="fold" open>
+            <summary>Sections</summary>
+            <div class="fold-body">
+                <div class="section-buttons">
+                    <button id="horizontal-section-button" type="button" disabled>Horizontal</button>
+                    <button id="vertical-section-button" type="button" disabled>Vertical</button>
+                    <button id="clear-section-button" type="button" disabled>Clear</button>
+                </div>
+                <div id="section-info" class="section-info">Load a point cloud to create sections.</div>
+            </div>
+        </details>
 
+        <details class="fold" open>
+            <summary>Export (full resolution)</summary>
+            <div class="fold-body">
+                <p class="hint">Reads every point of the COPC file, not just what is in view. Output is an uncompressed LAS 1.4 file (point format 7, with RGB) in LV95.</p>
 
-        <!-- =================================================
-             TILE ACTIONS
-             ================================================= -->
+                <div class="ctrl check">
+                    <input id="exp-rgb" type="checkbox" checked>
+                    <label for="exp-rgb">Colour with SWISSIMAGE RGB</label>
+                </div>
 
-        <div class="selected-actions">
+                <div class="export-buttons">
+                    <button id="export-tile-button" type="button" class="primary" disabled>Export coloured tile</button>
+                    <button id="export-section-button" type="button" class="primary" disabled>Export section</button>
+                    <button id="export-cancel-button" type="button" hidden>Cancel export</button>
+                </div>
 
-            <button
-                id="load-button"
-                type="button"
-                disabled
-            >
-                Load
-            </button>
+                <div id="export-info" class="section-info">Select a tile to enable export. Sections are exported from the active section box.</div>
+            </div>
+        </details>
 
+    </aside>
 
-            <button
-                id="unload-button"
-                type="button"
-                disabled
-            >
-                Unload
-            </button>
-
-
-            <button
-                id="download-button"
-                type="button"
-                disabled
-            >
-                Download
-            </button>
-
-        </div>
-
-    </div>
-
-
-    <!-- =====================================================
-         STATUS
-         ===================================================== -->
-
-    <div id="status">
-        Ready.
-    </div>
-
-
-    <!-- =====================================================
-         POTREE SIDEBAR CONTAINER
-         ===================================================== -->
+    <!-- Status -->
+    <div id="status">Ready.</div>
 
     <div id="potree_sidebar_container"></div>
-
 
 </div>
 
 
-<!-- =========================================================
-     JAVASCRIPT DEPENDENCIES
-     ========================================================= -->
-     <script src="./potree/libs/three.js/build/three.min.js"></script>
+<!-- About / impressum -->
+<dialog id="readme">
+    <div class="readme-inner">
+        <button id="readme-close" type="button" class="close" aria-label="Close">Close</button>
 
+        <h2>Swiss LiDAR Viewer</h2>
+
+        <h3>Impressum</h3>
+        <p>
+            © ETH Zürich, Institute for Landscape and Urban Studies,<br>
+            Professur Voser<br>
+            Author: Dennis Häusler
+        </p>
+
+        <h3>How it works</h3>
+        <ol>
+            <li><strong>Find tiles.</strong> The visible map extent is sent to the swisstopo STAC API, which lists the swissSURFACE3D tiles (1 km × 1 km) that intersect it. Each tile is a Cloud Optimized Point Cloud (COPC) file.</li>
+            <li><strong>View.</strong> Selecting a tile streams its COPC file into the Potree viewer. Only the parts needed for the current view are requested, up to the point budget you set under <em>Appearance</em>.</li>
+            <li><strong>SWISSIMAGE colour.</strong> The swissSURFACE3D points carry no colour. For each point, its LV95 coordinate is converted to Web Mercator and one pixel is read from the SWISSIMAGE orthophoto (WMTS) covering the tile. That pixel becomes the point's RGB value.</li>
+            <li><strong>Sections.</strong> A horizontal or vertical box clips the cloud. Position and thickness are set with the sliders.</li>
+            <li><strong>Export.</strong> Export reads every node of the COPC file directly, so the result has the full point density and is independent of the viewer's point budget. The section export keeps only the points inside the section box. Files are written as uncompressed LAS 1.4 (point format 7) with a CRS record for CH1903+ / LV95.</li>
+        </ol>
+
+        <h3>Notes</h3>
+        <ul>
+            <li>SWISSIMAGE colour is sampled from a raster that may be limited in resolution for browser memory reasons; the colour of a point therefore comes from the nearest raster pixel at that resolution.</li>
+            <li>Large exports need time and disk space. Chromium-based browsers write directly to disk; other browsers assemble the file in memory first.</li>
+        </ul>
+
+        <h3>Data and software</h3>
+        <ul>
+            <li>swissSURFACE3D and SWISSIMAGE: © swisstopo</li>
+            <li>Viewer: Potree. Map: Leaflet. Projections: proj4js.</li>
+        </ul>
+    </div>
+</dialog>
+
+
+<!-- JavaScript dependencies -->
+<script src="./potree/libs/three.js/build/three.min.js"></script>
 <script src="./potree/libs/jquery/jquery-3.1.1.min.js"></script>
-
 <script src="./potree/libs/spectrum/spectrum.js"></script>
-
 <script src="./potree/libs/jquery-ui/jquery-ui.min.js"></script>
-
 <script src="./potree/libs/other/BinaryHeap.js"></script>
-
 <script src="./potree/libs/tween/tween.min.js"></script>
-
 <script src="./potree/libs/d3/d3.js"></script>
-
 <script src="./potree/libs/proj4/proj4.js"></script>
-
 <script src="./potree/libs/openlayers3/ol.js"></script>
-
 <script src="./potree/libs/i18next/i18next.js"></script>
-
 <script src="./potree/libs/jstree/jstree.js"></script>
-
 <script src="./potree/libs/copc/index.js"></script>
 
-
-<!-- =========================================================
-     POTREE
-     ========================================================= -->
-
+<!-- Potree -->
 <script src="./potree/build/potree/potree.js"></script>
 
-
 <!-- LAS/LAZ -->
-
 <script src="./potree/libs/plasio/js/laslaz.js"></script>
 
-
-<!-- =========================================================
-     LEAFLET
-     ========================================================= -->
-
+<!-- Leaflet -->
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 
-
-<!-- =========================================================
-     APPLICATION
-     ========================================================= -->
-
+<!-- Application (order matters: app.js first) -->
 <script src="./config.js"></script>
-
 <script src="./app.js"></script>
-
+<script src="./ui.js"></script>
+<script src="./export.js"></script>
 
 </body>
 

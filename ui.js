@@ -32,7 +32,14 @@
         edlStrength: 1,
         bg: "#000000",
         bgCustom: "#101418",
-        swissZoom: 19
+        swissZoom: 19,
+        // raster colouring (colorsource.js)
+        colorSource: "swissimage",
+        colorTimes: {},          // chosen year per map source
+        colorApply: "all",
+        occlusion: true,
+        leanX: 0,                // metres of shift per 10 m of height
+        leanY: 0
     };
 
     let settings = loadSettings();
@@ -189,10 +196,10 @@
         return {
             label: `${resText}/px${zoom >= 20 ? " (native)" : ""}`,
             info:
-                `SWISSIMAGE 10 cm GeoTIFF of the tile (LV95), about ` +
+                `SWISSIMAGE: about ` +
                 `${(side / 1000).toFixed(1)}k × ${(side / 1000).toFixed(1)} px, ` +
                 `${megabytes >= 1000 ? (megabytes / 1000).toFixed(1) + " GB" : Math.round(megabytes) + " MB"} memory. ` +
-                `Also used for the export.`
+                `Maps are read at their finest level up to this resolution. Also used for the export.`
         };
     }
 
@@ -224,6 +231,223 @@
                 // no-op if already running; the running loop rebuilds the raster
                 startSwissImageProcessing();
             }
+        }
+    }
+
+    /* ------------------------------------------------------------
+       Raster colour source, ground-only, walls, tower lean
+       ------------------------------------------------------------ */
+
+    const leanText = v => {
+        const value = Number(v);
+        return value === 0 ? "off" : `${value > 0 ? "+" : ""}${value.toFixed(2)} m / 10 m`;
+    };
+
+    const timeText = t => (/^\d{8}$/.test(t) ? t.slice(0, 4) : t);
+
+    function pushColorSettings() {
+        const c = window.swissColor?.settings;
+        if (!c) return;
+
+        // a picked file cannot be restored after a reload
+        const source = settings.colorSource === "local" && !window.swissColor.local.tif
+            ? "swissimage"
+            : settings.colorSource;
+
+        c.source = source;
+        c.time = settings.colorTimes?.[source] || "";
+        c.apply = settings.colorApply;
+        c.occlusion = settings.occlusion;
+        c.leanX = settings.leanX / 10;
+        c.leanY = settings.leanY / 10;
+    }
+
+    async function refreshTimeOptions() {
+        const row = el("color-time-row");
+        const select = el("color-time");
+        if (!row || !select) return;
+
+        const source = window.swissColor.settings.source;
+        row.hidden = true;
+
+        try {
+            const info = await window.swissColor.times(source);
+
+            if (!info || info.times.length < 2) return;
+
+            select.innerHTML = "";
+
+            for (const t of info.times) {
+                const option = document.createElement("option");
+                option.value = t;
+                option.textContent = timeText(t);
+                select.appendChild(option);
+            }
+
+            select.value = window.swissColor.settings.time || info.defaultTime || info.times[0];
+            row.hidden = false;
+        } catch (error) {
+            console.warn("[colour] could not read the map years:", error);
+        }
+    }
+
+    function fillBandSelects(info) {
+        const box = el("color-bands");
+        if (!box) return;
+
+        box.hidden = !info;
+        if (!info) return;
+
+        const local = window.swissColor.local;
+
+        ["band-r", "band-g", "band-b"].forEach((id, k) => {
+            const select = el(id);
+            select.innerHTML = "";
+
+            for (let b = 0; b < info.bands; b++) {
+                const option = document.createElement("option");
+                option.value = b;
+                option.textContent = `Band ${b + 1}`;
+                select.appendChild(option);
+            }
+
+            select.value = local.bands[k];
+        });
+
+        el("band-stretch").checked = local.stretch;
+    }
+
+    function syncColorControls() {
+        const c = window.swissColor?.settings;
+        if (!c) return;
+
+        // the select shows the choice even before a file is picked
+        if (el("color-source")) el("color-source").value = settings.colorSource;
+        if (el("color-apply")) el("color-apply").value = c.apply;
+        if (el("color-occlusion")) el("color-occlusion").checked = c.occlusion;
+        if (el("color-local-row")) el("color-local-row").hidden = settings.colorSource !== "local";
+
+        for (const [key, id] of [["leanX", "swiss-lean-x"], ["leanY", "swiss-lean-y"]]) {
+            if (el(id)) el(id).value = settings[key];
+            if (el(`${id}-out`)) el(`${id}-out`).textContent = leanText(settings[key]);
+        }
+
+        void refreshTimeOptions();
+    }
+
+    function bindColorSource() {
+        if (!window.swissColor) return;
+
+        el("color-source")?.addEventListener("change", event => {
+            const source = event.target.value;
+
+            settings.colorSource = source;
+
+            // geology belongs on the terrain only
+            if (window.swissColor.sources[source]?.groundOnly && settings.colorApply === "all") {
+                settings.colorApply = "ground-grey";
+                setStatus("Geology is shown on ground points only (change under 'Apply raster to').");
+            }
+
+            saveSettings();
+            pushColorSettings();   // "local" only becomes active once a file is picked
+            syncColorControls();
+
+            if (source === "local" && !window.swissColor.local.tif) {
+                el("color-file")?.click();
+                return;
+            }
+
+            window.swissColor.sourceChanged();
+        });
+
+        el("color-time")?.addEventListener("change", event => {
+            const source = window.swissColor.settings.source;
+
+            settings.colorTimes = { ...(settings.colorTimes || {}), [source]: event.target.value };
+            window.swissColor.settings.time = event.target.value;
+            saveSettings();
+            window.swissColor.sourceChanged();
+        });
+
+        el("color-file")?.addEventListener("change", async event => {
+            const info = el("color-file-info");
+
+            try {
+                const meta = await window.swissColor.setLocalFiles(event.target.files);
+
+                if (info) {
+                    info.textContent =
+                        `${meta.name}: ${meta.width.toLocaleString()} × ${meta.height.toLocaleString()} px, ` +
+                        `${meta.bands} band(s), ${meta.bitsPerSample[0] || meta.bitsPerSample} bit.` +
+                        (meta.bands >= 4 ? " For colour-infrared choose NIR → red, red → green, green → blue." : "");
+                }
+
+                fillBandSelects(meta);
+                settings.colorSource = "local";
+                window.swissColor.settings.source = "local";
+                saveSettings();
+                syncColorControls();
+                window.swissColor.sourceChanged();
+            } catch (error) {
+                if (info) info.textContent = error.message;
+                setStatus(error.message);
+            }
+        });
+
+        for (const [k, id] of [[0, "band-r"], [1, "band-g"], [2, "band-b"]]) {
+            el(id)?.addEventListener("change", event => {
+                const local = window.swissColor.local;
+                local.bands[k] = Number(event.target.value);
+                local.version++;
+                window.swissColor.sourceChanged();
+            });
+        }
+
+        el("band-stretch")?.addEventListener("change", event => {
+            const local = window.swissColor.local;
+            local.stretch = event.target.checked;
+            local.version++;
+            window.swissColor.sourceChanged();
+        });
+
+        el("color-apply")?.addEventListener("change", event => {
+            settings.colorApply = event.target.value;
+            saveSettings();
+            pushColorSettings();
+            window.swissColor.rulesChanged();
+        });
+
+        el("color-occlusion")?.addEventListener("change", event => {
+            settings.occlusion = event.target.checked;
+            saveSettings();
+            pushColorSettings();
+            window.swissColor.rulesChanged();
+        });
+
+        for (const [key, id] of [["leanX", "swiss-lean-x"], ["leanY", "swiss-lean-y"]]) {
+            const input = el(id);
+            const out = el(`${id}-out`);
+            if (!input) continue;
+
+            input.addEventListener("input", () => {
+                settings[key] = Number(input.value);
+                if (out) out.textContent = leanText(settings[key]);
+            });
+
+            // recolouring is heavy: only when the slider is released
+            input.addEventListener("change", () => {
+                settings[key] = Number(input.value);
+                saveSettings();
+                pushColorSettings();
+                window.swissColor.rulesChanged();
+            });
+
+            input.addEventListener("dblclick", () => {
+                input.value = 0;
+                input.dispatchEvent(new Event("input"));
+                input.dispatchEvent(new Event("change"));
+            });
         }
     }
 
@@ -339,6 +563,9 @@
             saveSettings();
             syncControls();
             applyViewerSettings();
+            pushColorSettings();
+            syncColorControls();
+            window.swissColor?.sourceChanged();
             applySwissZoom();
             setStatus("Appearance reset.");
         });
@@ -415,8 +642,11 @@
 
     document.addEventListener("DOMContentLoaded", () => {
         SWISSIMAGE_RGB.zoom = settings.swissZoom;
+        pushColorSettings();
         syncControls();
+        syncColorControls();
         bindAppearance();
+        bindColorSource();
         bindLayout();
         bindReadme();
         applyViewerSettings();

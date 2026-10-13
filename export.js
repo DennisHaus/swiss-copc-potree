@@ -266,111 +266,29 @@
        ============================================================ */
 
     async function createColorSampler(bounds) {
-        const key = tileKey(currentTile, 0);
-
-        if (
-            !SWISSIMAGE_RGB.raster ||
-            SWISSIMAGE_RGB.raster.tileKey !== key ||
-            SWISSIMAGE_RGB.raster.requestedZoom !== SWISSIMAGE_RGB.zoom
-        ) {
-            setStatus("Preparing SWISSIMAGE for export…");
+        if (!swissImageRasterIsCurrent()) {
+            setStatus("Preparing raster colours for export…");
             await prepareSwissImageRaster();
         }
 
         const raster = SWISSIMAGE_RGB.raster;
 
         if (!raster?.rgb) {
-            throw new Error("SWISSIMAGE raster is not available.");
+            throw new Error("Raster colours are not available.");
         }
 
         colourNote = swissTileNote(raster);
 
-        const pixels = raster.rgb;
+        // same source, ground-only / wall / lean rules as in the viewer;
+        // the ground and top grids were built while the tile was viewed
+        const ctx = swissColorContext(raster, getSwissMapper(raster));
+        swissGroundRefresh(ctx.grids, true);
+
         const out = [128, 128, 128];
 
-        // LV95 GeoTIFF: no reprojection, points map to pixels directly
-        if (raster.kind === "lv95") {
-            const invResE = 1 / raster.resE;
-            const invResN = 1 / raster.resN;
-
-            const sampleDirect = (e, n) => {
-                const ix = Math.floor((e - raster.originE) * invResE);
-                const iy = Math.floor((raster.originN - n) * invResN);
-
-                if (ix < 0 || iy < 0 || ix >= raster.width || iy >= raster.height) {
-                    out[0] = out[1] = out[2] = 128;
-                    return out;
-                }
-
-                const p = (iy * raster.width + ix) * 3;
-                out[0] = pixels[p];
-                out[1] = pixels[p + 1];
-                out[2] = pixels[p + 2];
-                return out;
-            };
-
-            return { sample: sampleDirect, raster };
-        }
-
-        // LV95 -> Web Mercator on a coarse grid; bilinear in between.
-        // Over one tile this is accurate to far below one pixel and avoids
-        // a proj4 call per point.
-        const N = 16;
-        const pad = 5;
-        const minE = bounds.min[0] - pad, maxE = bounds.max[0] + pad;
-        const minN = bounds.min[1] - pad, maxN = bounds.max[1] + pad;
-        const dE = maxE - minE, dN = maxN - minN;
-
-        const gx = new Float64Array((N + 1) * (N + 1));
-        const gy = new Float64Array((N + 1) * (N + 1));
-        const R = 6378137;
-
-        for (let j = 0; j <= N; j++) {
-            for (let i = 0; i <= N; i++) {
-                const [lon, lat] = proj4(
-                    "EPSG:2056",
-                    "EPSG:4326",
-                    [minE + (dE * i) / N, minN + (dN * j) / N]
-                );
-
-                gx[j * (N + 1) + i] = R * lon * Math.PI / 180;
-                gy[j * (N + 1) + i] = R * Math.log(Math.tan(Math.PI / 4 + (lat * Math.PI / 180) / 2));
-            }
-        }
-
-        const scaleX = raster.width / (raster.worldMaxX - raster.worldMinX);
-        const scaleY = raster.height / (raster.worldMaxY - raster.worldMinY);
-
-        // Returns [r, g, b] (0-255) for an LV95 coordinate; array is reused.
-        function sample(e, n) {
-            let u = ((e - minE) / dE) * N;
-            let v = ((n - minN) / dN) * N;
-
-            u = Math.min(Math.max(u, 0), N - 1e-9);
-            v = Math.min(Math.max(v, 0), N - 1e-9);
-
-            const i = Math.floor(u), j = Math.floor(v);
-            const fu = u - i, fv = v - j;
-            const k = j * (N + 1) + i;
-
-            const bilerp = g =>
-                g[k] * (1 - fu) * (1 - fv) +
-                g[k + 1] * fu * (1 - fv) +
-                g[k + N + 1] * (1 - fu) * fv +
-                g[k + N + 2] * fu * fv;
-
-            const ix = Math.floor((bilerp(gx) - raster.worldMinX) * scaleX);
-            const iy = Math.floor((raster.worldMaxY - bilerp(gy)) * scaleY);
-
-            if (ix < 0 || iy < 0 || ix >= raster.width || iy >= raster.height) {
-                out[0] = out[1] = out[2] = 128;
-                return out;
-            }
-
-            const p = (iy * raster.width + ix) * 3;
-            out[0] = pixels[p];
-            out[1] = pixels[p + 1];
-            out[2] = pixels[p + 2];
+        // Returns [r, g, b] (0-255) for an LV95 point; array is reused.
+        function sample(e, n, z, cls) {
+            swissColorPoint(ctx, e, n, z === undefined ? NaN : z, cls === undefined ? -1 : cls, out, 0);
             return out;
         }
 
@@ -703,7 +621,7 @@
                 let r = 0, g = 0, b = 0;
 
                 if (colour) {
-                    const rgb = colour.sample(x, y);
+                    const rgb = colour.sample(x, y, z, classification ? classification(i) : -1);
                     r = rgb[0] * 257;
                     g = rgb[1] * 257;
                     b = rgb[2] * 257;
@@ -849,7 +767,7 @@
                 let r = 0, g = 0, b = 0;
 
                 if (colour) {
-                    const rgb = colour.sample(x, y);
+                    const rgb = colour.sample(x, y, z, cls);
                     r = rgb[0] * 257; g = rgb[1] * 257; b = rgb[2] * 257;
                 } else if (rgbAt !== undefined) {
                     r = dv.getUint16(p + rgbAt, true);

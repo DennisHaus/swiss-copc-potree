@@ -636,29 +636,36 @@
         }
 
         const raster = SWISSIMAGE_RGB.raster;
+        const colorKey = swissColorKey(raster);
 
-        if (d.swissRasterId === raster.id && d.swissRgba) {
+        if (d.swissRasterId === colorKey && d.swissRgba) {
             return;
         }
 
         const mapper = getSwissMapper(raster);
-        const { N, gx, gy, minE, minN } = mapper;
-        const invE = N / (mapper.maxE - minE);
-        const invN = N / (mapper.maxN - minN);
-        const stride = N + 1;
-
-        const scaleX = raster.width / (raster.worldMaxX - raster.worldMinX);
-        const scaleY = raster.height / (raster.worldMaxY - raster.worldMinY);
-        const rgb = raster.rgb;
+        const ctx = swissColorContext(raster, mapper);
 
         const rgba = d.swissRgba || new Uint8Array(d.count * 4);
         const pos = d.pos;
-        const [ox, oy] = d.origin;
+        const cls = d.cls || null;
+        const [ox, oy, oz] = d.origin;
 
-        // LV95 GeoTIFF: points map to pixels directly
-        const direct = !!mapper.direct;
-        const invResE = direct ? 1 / raster.resE : 0;
-        const invResN = direct ? 1 / raster.resN : 0;
+        // the whole tile is in memory: complete ground / top grids first
+        if (!ctx.grids.fed.has(d)) {
+            ctx.grids.fed.add(d);
+
+            for (let i = 0; i < d.count; i++) {
+                swissGridsAdd(
+                    ctx.grids,
+                    ox + pos[i * 3], oy + pos[i * 3 + 1], oz + pos[i * 3 + 2],
+                    cls ? cls[i] : -1
+                );
+            }
+
+            if (cls) ctx.grids.hasClasses = true;
+        }
+
+        swissGroundRefresh(ctx.grids, true);
 
         let outside = 0;
 
@@ -666,40 +673,15 @@
             const end = Math.min(start + 500000, d.count);
 
             for (let i = start; i < end; i++) {
-                let ix, iy;
-
-                if (direct) {
-                    ix = Math.floor((ox + pos[i * 3] - raster.originE) * invResE);
-                    iy = Math.floor((raster.originN - oy - pos[i * 3 + 1]) * invResN);
-                } else {
-                    let u = (ox + pos[i * 3] - minE) * invE;
-                    let v = (oy + pos[i * 3 + 1] - minN) * invN;
-
-                    if (u < 0) u = 0; else if (u > N - 1e-9) u = N - 1e-9;
-                    if (v < 0) v = 0; else if (v > N - 1e-9) v = N - 1e-9;
-
-                    const gi = Math.floor(u), gj = Math.floor(v);
-                    const fu = u - gi, fv = v - gj;
-                    const k = gj * stride + gi;
-                    const w00 = (1 - fu) * (1 - fv), w10 = fu * (1 - fv);
-                    const w01 = (1 - fu) * fv, w11 = fu * fv;
-
-                    const mx = gx[k] * w00 + gx[k + 1] * w10 + gx[k + stride] * w01 + gx[k + stride + 1] * w11;
-                    const my = gy[k] * w00 + gy[k + 1] * w10 + gy[k + stride] * w01 + gy[k + stride + 1] * w11;
-
-                    ix = Math.floor((mx - raster.worldMinX) * scaleX);
-                    iy = Math.floor((raster.worldMaxY - my) * scaleY);
-                }
-
                 const c = i * 4;
 
-                if (ix < 0 || iy < 0 || ix >= raster.width || iy >= raster.height) {
-                    rgba[c] = rgba[c + 1] = rgba[c + 2] = 128;
-                    outside++;
-                } else {
-                    const p = (iy * raster.width + ix) * 3;
-                    rgba[c] = rgb[p]; rgba[c + 1] = rgb[p + 1]; rgba[c + 2] = rgb[p + 2];
-                }
+                outside += swissColorPoint(
+                    ctx,
+                    ox + pos[i * 3], oy + pos[i * 3 + 1], oz + pos[i * 3 + 2],
+                    cls ? cls[i] : -1,
+                    rgba,
+                    c
+                );
 
                 rgba[c + 3] = 255;
             }
@@ -711,12 +693,12 @@
         hideSwissImageProgress();
 
         d.swissRgba = rgba;
-        d.swissRasterId = raster.id;
+        d.swissRasterId = colorKey;
 
         const pct = (100 * outside) / d.count;
 
         setStatus(
-            "SWISSIMAGE RGB applied" +
+            `${raster.label || "SWISSIMAGE"} applied` +
             (pct > 1 ? ` (${pct.toFixed(1)} % of points outside the raster)` : "") +
             (raster.failedTiles ? `; ${raster.failedTiles} map tile(s) could not be loaded` : "") +
             "."
@@ -867,7 +849,7 @@
                         !force &&
                         data.swissRgba &&
                         swissImageRasterIsCurrent() &&
-                        data.swissRasterId === SWISSIMAGE_RGB.raster.id;
+                        data.swissRasterId === swissColorKey(SWISSIMAGE_RGB.raster);
 
                     if (!upToDate) {
                         // the tile must not be switched while colours are computed

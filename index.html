@@ -180,7 +180,7 @@
             <div class="fold-body">
                 <label for="color-mode" class="control-label">Colour points by</label>
                 <select id="color-mode">
-                    <option value="swissimage">SWISSIMAGE RGB</option>
+                    <option value="swissimage">Raster (orthophoto / map)</option>
                     <option value="intensity">Intensity</option>
                     <option value="classification">Classification</option>
                     <option value="elevation">Elevation</option>
@@ -189,10 +189,63 @@
                     <option value="source-id">Source ID</option>
                 </select>
 
+                <div class="ctrl swiss-source">
+                    <label for="color-source" class="control-label">Raster</label>
+                    <select id="color-source">
+                        <option value="swissimage">SWISSIMAGE 10 cm (current)</option>
+                        <option value="hist1946">SWISSIMAGE HIST 1946</option>
+                        <option value="siegfried">Siegfried map (1870–1949)</option>
+                        <option value="dufour">Dufour map (1845–1939)</option>
+                        <option value="geology">Geological atlas GA25</option>
+                        <option value="local">Own GeoTIFF / TIFF + TFW…</option>
+                    </select>
+
+                    <div id="color-time-row" hidden>
+                        <label for="color-time" class="control-label">Year / edition</label>
+                        <select id="color-time"></select>
+                    </div>
+
+                    <div id="color-local-row" hidden>
+                        <input id="color-file" type="file" accept=".tif,.tiff,.tfw,.tifw,.wld" multiple>
+                        <div id="color-file-info" class="section-info">
+                            Pick the .tif (plus its .tfw world file, if it has one). LV95 or LV03.
+                        </div>
+                        <div id="color-bands" hidden>
+                            <label class="control-label">Bands → red / green / blue</label>
+                            <select id="band-r"></select>
+                            <select id="band-g"></select>
+                            <select id="band-b"></select>
+                            <label><input id="band-stretch" type="checkbox"> Contrast stretch (2–98 %)</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="ctrl">
+                    <label for="color-apply" class="control-label">Apply raster to</label>
+                    <select id="color-apply">
+                        <option value="all">All points</option>
+                        <option value="ground-class">Ground only, rest by classification</option>
+                        <option value="ground-grey">Ground only, rest grey</option>
+                    </select>
+                    <label><input id="color-occlusion" type="checkbox"> Neutral colour for walls (not visible from above)</label>
+                </div>
+
                 <div class="ctrl swiss-res">
-                    <label for="swiss-zoom">SWISSIMAGE resolution <output id="swiss-zoom-out"></output></label>
+                    <label for="swiss-zoom">Raster resolution <output id="swiss-zoom-out"></output></label>
                     <input id="swiss-zoom" type="range" min="15" max="20" step="1">
                     <div id="swiss-zoom-info" class="section-info"></div>
+                </div>
+
+                <div class="ctrl swiss-lean">
+                    <label for="swiss-lean-x">Tower lean east–west <output id="swiss-lean-x-out"></output></label>
+                    <input id="swiss-lean-x" type="range" min="-5" max="5" step="0.05">
+                    <label for="swiss-lean-y">Tower lean north–south <output id="swiss-lean-y-out"></output></label>
+                    <input id="swiss-lean-y" type="range" min="-5" max="5" step="0.05">
+                    <div class="section-info">
+                        Orthophotos are rectified on the terrain, so towers lean away from the camera.
+                        If a tower's colour sits east of the tower, move east–west to the right
+                        (value = metres per 10 m of height). Double-click a slider to reset it.
+                    </div>
                 </div>
             </div>
         </details>
@@ -395,6 +448,7 @@
 
 <script src="./config.js"></script>
 <script src="./app.js"></script>
+<script src="./colorsource.js"></script>
 <script src="./laz.js"></script>
 <script src="./ui.js"></script>
 <script src="./export.js"></script>

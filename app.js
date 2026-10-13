@@ -1992,7 +1992,8 @@ function swissImageRasterIsCurrent() {
         raster &&
         currentTile &&
         raster.tileKey === tileKey(currentTile, 0) &&
-        raster.requestedZoom === SWISSIMAGE_RGB.zoom
+        raster.requestedZoom === SWISSIMAGE_RGB.zoom &&
+        raster.sourceKey === swissSourceKey()
     );
 }
 
@@ -2033,6 +2034,27 @@ function swissImageFrame() {
 
     const raster = SWISSIMAGE_RGB.raster;
     const mapper = getSwissMapper(raster);
+
+    // height-above-ground / top-surface grids from everything loaded so far
+    if (!raster.gridsFed) {
+        raster.gridsFed = true;
+        const grids = getSwissGrids(mapper);
+
+        forEachLoadedTreeNode(currentPointCloud, node => {
+            const sceneNode = node.sceneNode;
+            const position = sceneNode?.geometry?.attributes?.position;
+
+            if (position && position.count > 0) {
+                const e = resolveSwissNodeMatrix(sceneNode, node, mapper, position, position.count);
+                swissGridsFeedGeometry(grids, sceneNode.geometry, e);
+            }
+
+            return true;
+        });
+
+        swissGroundRefresh(grids, true);
+    }
+
     const start = performance.now();
 
     let pendingVisible = false;
@@ -2095,7 +2117,7 @@ function swissImageFrame() {
             : 0;
 
         setStatus(
-            "SWISSIMAGE RGB applied" +
+            `${raster.label || "SWISSIMAGE"} applied` +
             (outside > 1
                 ? ` (${outside.toFixed(1)} % of points fall outside the raster)`
                 : "") +
@@ -2203,7 +2225,7 @@ function swissNodeNeedsColor(sceneNode, raster) {
     return !!(
         position &&
         position.count > 0 &&
-        geometry.userData?.swissImageColoredFor !== raster.id
+        geometry.userData?.swissImageColoredFor !== swissColorKey(raster)
     );
 }
 
@@ -2533,8 +2555,16 @@ async function prepareSwissImageRaster() {
         throw new Error("Selected tile has no bbox.");
     }
 
+    // other colour sources (maps, 1946, own file): see colorsource.js
+    if (swissSource().type !== "dop10") {
+        await prepareOtherSourceRaster();
+        return;
+    }
+
     try {
         if (await prepareSwissImageRasterDop10()) {
+            SWISSIMAGE_RGB.raster.sourceKey = swissSourceKey();
+            SWISSIMAGE_RGB.raster.label = `SWISSIMAGE ${SWISSIMAGE_RGB.raster.year}`;
             return;
         }
     } catch (error) {
@@ -2544,6 +2574,9 @@ async function prepareSwissImageRaster() {
     await prepareSwissImageRasterWmts();
 
     if (SWISSIMAGE_RGB.raster) {
+        SWISSIMAGE_RGB.raster.sourceKey = swissSourceKey();
+        SWISSIMAGE_RGB.raster.label = "SWISSIMAGE (WMTS)";
+
         setStatus(
             "No SWISSIMAGE GeoTIFF for this tile - using the WMTS map tiles " +
             "(reprojected, may be a different flight)."
@@ -3447,25 +3480,11 @@ function colorNodeSync(sceneNode, raster, mapper, treeNode) {
     const positions = position.array;
     const itemSize = position.itemSize || 3;
     const colors = color.array;
-    const rgbData = raster.rgb;
+    const cls = geometry.attributes.classification?.array || null;
 
-    const { N, gx, gy, minE, minN } = mapper;
-    const invE = N / (mapper.maxE - minE);
-    const invN = N / (mapper.maxN - minN);
-    const stride = N + 1;
-
-    const worldMinX = raster.worldMinX;
-    const worldMaxY = raster.worldMaxY;
-    const scaleX = raster.width / (raster.worldMaxX - raster.worldMinX);
-    const scaleY = raster.height / (raster.worldMaxY - raster.worldMinY);
-    const width = raster.width;
-    const height = raster.height;
-
-    const direct = !!mapper.direct;
-    const originE = raster.originE;
-    const originN = raster.originN;
-    const invResE = direct ? 1 / raster.resE : 0;
-    const invResN = direct ? 1 / raster.resN : 0;
+    // ground / top grids get this node's points first (no-op if already in)
+    const ctx = swissColorContext(raster, mapper);
+    swissGridsFeedGeometry(ctx.grids, geometry, e);
 
     let outside = 0;
 
@@ -3477,61 +3496,18 @@ function colorNodeSync(sceneNode, raster, mapper, treeNode) {
         const z = itemSize >= 3 ? positions[j + 2] : 0;
 
         // THREE.Matrix4 elements are column-major.
-        const worldX = e[0] * x + e[4] * y + e[8] * z + e[12];
-        const worldY = e[1] * x + e[5] * y + e[9] * z + e[13];
-
-        let ix, iy;
-
-        if (direct) {
-            // LV95 GeoTIFF: plain arithmetic
-            ix = Math.floor((worldX - originE) * invResE);
-            iy = Math.floor((originN - worldY) * invResN);
-        } else {
-            let u = (worldX - minE) * invE;
-            let v = (worldY - minN) * invN;
-
-            if (u < 0) u = 0; else if (u > N - 1e-9) u = N - 1e-9;
-            if (v < 0) v = 0; else if (v > N - 1e-9) v = N - 1e-9;
-
-            const gi = Math.floor(u);
-            const gj = Math.floor(v);
-            const fu = u - gi;
-            const fv = v - gj;
-            const k = gj * stride + gi;
-
-            const w00 = (1 - fu) * (1 - fv);
-            const w10 = fu * (1 - fv);
-            const w01 = (1 - fu) * fv;
-            const w11 = fu * fv;
-
-            const mx =
-                gx[k] * w00 + gx[k + 1] * w10 +
-                gx[k + stride] * w01 + gx[k + stride + 1] * w11;
-
-            const my =
-                gy[k] * w00 + gy[k + 1] * w10 +
-                gy[k + stride] * w01 + gy[k + stride + 1] * w11;
-
-            ix = Math.floor((mx - worldMinX) * scaleX);
-            iy = Math.floor((worldMaxY - my) * scaleY);
-        }
-
         const c = i * 4;
 
-        if (ix < 0 || iy < 0 || ix >= width || iy >= height) {
-            colors[c] = 128;
-            colors[c + 1] = 128;
-            colors[c + 2] = 128;
-            colors[c + 3] = 255;
-            outside++;
-            continue;
-        }
+        outside += swissColorPoint(
+            ctx,
+            e[0] * x + e[4] * y + e[8] * z + e[12],
+            e[1] * x + e[5] * y + e[9] * z + e[13],
+            e[2] * x + e[6] * y + e[10] * z + e[14],
+            cls ? cls[i] : -1,
+            colors,
+            c
+        );
 
-        const p = (iy * width + ix) * 3;
-
-        colors[c] = rgbData[p];
-        colors[c + 1] = rgbData[p + 1];
-        colors[c + 2] = rgbData[p + 2];
         colors[c + 3] = 255;
     }
 
@@ -3544,7 +3520,7 @@ function colorNodeSync(sceneNode, raster, mapper, treeNode) {
 
     color.needsUpdate = true;
 
-    geometry.userData.swissImageColoredFor = raster.id;
+    geometry.userData.swissImageColoredFor = swissColorKey(raster);
 
     raster.stats.points += count;
     raster.stats.outside += outside;

@@ -2211,7 +2211,348 @@ function swissNodeNeedsColor(sceneNode, raster) {
    SWISSIMAGE RASTER PREPARATION
    ============================================================ */
 
+/* ============================================================
+   SWISSIMAGE 10 cm GEOTIFF (LV95) - preferred source
+   ============================================================ */
+
+/*
+ * The same product you would load into FME: the SWISSIMAGE 10 cm
+ * GeoTIFF of the tile, from the STAC collection
+ * ch.swisstopo.swissimage-dop10. It is in LV95 and cut into the same
+ * 1 km tiles as swissSURFACE3D, so a point is coloured by plain
+ * arithmetic - no Web Mercator, no reprojection, no tile mosaic:
+ *
+ *     column = (E - left) / resolution,  row = (top - N) / resolution
+ *
+ * The WMTS map tiles are only used when no GeoTIFF exists for a tile
+ * or geotiff.js could not be loaded.
+ */
+const SWISSIMAGE_DOP10 = {
+    collection: "ch.swisstopo.swissimage-dop10",
+    assets: new Map(),   // LiDAR tile id -> chosen asset (or null)
+    tiffs: new Map()     // href -> opened GeoTIFF
+};
+
+const SWISSIMAGE_MAX_RASTER_PIXELS = 160 * 1024 * 1024;
+
+/* "2600-1200" from e.g. "swisssurface3d_2019_2600-1200" */
+function swissKmTileId(tile) {
+    const match = String(tile?.id || "").match(/(\d{4})-(\d{4})(?!.*\d{4}-\d{4})/);
+    return match ? `${match[1]}-${match[2]}` : null;
+}
+
+function swissItemYear(item) {
+    const match = String(item?.id || "").match(/_(\d{4})_\d{4}-\d{4}/);
+
+    if (match) {
+        return Number(match[1]);
+    }
+
+    const props = item?.properties || {};
+    const date = props.datetime || props.start_datetime || props.end_datetime;
+    const year = date ? new Date(date).getUTCFullYear() : NaN;
+
+    return Number.isFinite(year) ? year : NaN;
+}
+
+/* The 10 cm GeoTIFF of an item (not the 2 m one). */
+function pickDop10Href(item) {
+    let best = null;
+
+    for (const asset of Object.values(item?.assets || {})) {
+        const href = asset?.href || "";
+
+        if (!/\.tiff?($|\?)/i.test(href)) {
+            continue;
+        }
+
+        const gsd = Number(asset["gsd"] ?? asset["eo:gsd"]);
+
+        if (gsd === 0.1 || /_0\.1_/.test(href)) {
+            return href;
+        }
+
+        if (!best && !(gsd > 0.1) && !/_2_\d{4}\./.test(href)) {
+            best = href;
+        }
+    }
+
+    return best;
+}
+
+/*
+ * Find the GeoTIFF for the current LiDAR tile. If several years exist,
+ * take the one closest to the LiDAR year (newer one on a tie).
+ */
+async function findDop10Asset(tile) {
+    const id = swissKmTileId(tile);
+
+    if (!id || !Array.isArray(tile?.bbox)) {
+        return null;
+    }
+
+    const lidarYear = swissItemYear(tile);
+    const cacheKey = `${id}@${lidarYear}`;
+
+    if (SWISSIMAGE_DOP10.assets.has(cacheKey)) {
+        return SWISSIMAGE_DOP10.assets.get(cacheKey);
+    }
+
+    // a small box in the middle of the tile, so neighbours are not returned
+    const [west, south, east, north] = tile.bbox;
+    const cx = (west + east) / 2;
+    const cy = (south + north) / 2;
+    const d = 0.0005;
+
+    const url = new URL(
+        `${CONFIG.STAC_ROOT}/collections/${SWISSIMAGE_DOP10.collection}/items`
+    );
+
+    url.searchParams.set("bbox", [cx - d, cy - d, cx + d, cy + d].join(","));
+    url.searchParams.set("limit", "100");
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+        throw new Error(`SWISSIMAGE STAC request failed (${response.status})`);
+    }
+
+    const data = await response.json();
+    const items = (Array.isArray(data.features) ? data.features : [])
+        .filter(item => String(item.id || "").includes(id));
+
+    const candidates = items
+        .map(item => ({ item, href: pickDop10Href(item), year: swissItemYear(item) }))
+        .filter(candidate => candidate.href);
+
+    let chosen = null;
+
+    for (const candidate of candidates) {
+        if (!chosen) {
+            chosen = candidate;
+            continue;
+        }
+
+        if (Number.isFinite(lidarYear)) {
+            const a = Math.abs(candidate.year - lidarYear);
+            const b = Math.abs(chosen.year - lidarYear);
+
+            if (a < b || (a === b && candidate.year > chosen.year)) {
+                chosen = candidate;
+            }
+        } else if (candidate.year > chosen.year) {
+            chosen = candidate;
+        }
+    }
+
+    const result = chosen
+        ? {
+            href: chosen.href,
+            year: chosen.year,
+            itemId: chosen.item.id,
+            lidarYear,
+            years: candidates.map(c => c.year).filter(Number.isFinite).sort()
+        }
+        : null;
+
+    SWISSIMAGE_DOP10.assets.set(cacheKey, result);
+
+    return result;
+}
+
+async function openDop10Tiff(href) {
+    if (!SWISSIMAGE_DOP10.tiffs.has(href)) {
+        // reads only the header now; pixels are fetched with range requests
+        SWISSIMAGE_DOP10.tiffs.set(
+            href,
+            GeoTIFF.fromUrl(href).catch(error => {
+                SWISSIMAGE_DOP10.tiffs.delete(href);
+                throw error;
+            })
+        );
+    }
+
+    return SWISSIMAGE_DOP10.tiffs.get(href);
+}
+
+/*
+ * Load the GeoTIFF raster. Returns false when there is no GeoTIFF for
+ * the tile, so the caller can fall back to the WMTS tiles.
+ */
+async function prepareSwissImageRasterDop10() {
+    if (typeof GeoTIFF === "undefined" || typeof GeoTIFF.fromUrl !== "function") {
+        console.warn("[swiss-copc] geotiff.js is not loaded - using WMTS tiles.");
+        return false;
+    }
+
+    const found = await findDop10Asset(currentTile);
+
+    if (!found) {
+        return false;
+    }
+
+    SWISSIMAGE_RGB.loading = true;
+
+    try {
+        const requestedZoom = SWISSIMAGE_RGB.zoom;
+
+        // same steps as the slider: zoom 20 = 10 cm, 19 = 20 cm, 18 = 40 cm ...
+        const targetRes = 0.1 * Math.pow(2, 20 - requestedZoom);
+
+        setStatus(`Loading SWISSIMAGE ${found.year} GeoTIFF…`);
+        showSwissImageProgress(0, 1, `Loading SWISSIMAGE ${found.year}…`);
+
+        const tiff = await openDop10Tiff(found.href);
+        const base = await tiff.getImage(0);
+        const [left, bottom, right, top] = base.getBoundingBox();
+        const imageCount = await tiff.getImageCount();
+
+        // full resolution + overviews (skip masks / odd images)
+        const levels = [];
+
+        for (let i = 0; i < imageCount; i++) {
+            const image = i === 0 ? base : await tiff.getImage(i);
+
+            if (image.getSamplesPerPixel() < 3) {
+                continue;
+            }
+
+            const width = image.getWidth();
+            const height = image.getHeight();
+
+            levels.push({
+                image,
+                width,
+                height,
+                resE: (right - left) / width,
+                resN: (top - bottom) / height
+            });
+        }
+
+        if (!levels.length) {
+            throw new Error("GeoTIFF has no RGB image.");
+        }
+
+        levels.sort((a, b) => a.resE - b.resE);
+
+        // coarsest level that is still at least as sharp as requested
+        let index = 0;
+
+        for (let i = 0; i < levels.length; i++) {
+            if (levels[i].resE <= targetRes * 1.01) {
+                index = i;
+            }
+        }
+
+        // ... but never more pixels than the browser can hold
+        while (
+            index < levels.length - 1 &&
+            levels[index].width * levels[index].height > SWISSIMAGE_MAX_RASTER_PIXELS
+        ) {
+            index++;
+        }
+
+        const level = levels[index];
+
+        setStatus(
+            `Decoding SWISSIMAGE ${found.year} GeoTIFF ` +
+            `(${level.width.toLocaleString()} × ${level.height.toLocaleString()} px)…`
+        );
+
+        await yieldToBrowser();
+
+        // RGB, interleaved, YCbCr/JPEG already converted by geotiff.js
+        let rgb = await level.image.readRGB({ interleave: true });
+
+        if (!(rgb instanceof Uint8Array)) {
+            rgb = Uint8Array.from(rgb);
+        }
+
+        const key = tileKey(currentTile, 0);
+
+        const raster = {
+            kind: "lv95",
+            tileKey: key,
+            id: `${key}@dop10-${found.year}@${level.resE}`,
+            requestedZoom,
+            z: requestedZoom,
+            rgb,
+            width: level.width,
+            height: level.height,
+
+            // pixel (0, 0) top-left corner, in LV95
+            originE: left,
+            originN: top,
+            resE: level.resE,
+            resN: level.resN,
+
+            year: found.year,
+            source: found.href,
+            failedTiles: 0,
+            fallbackTiles: 0
+        };
+
+        SWISSIMAGE_RGB.raster = raster;
+
+        const cm = Math.round(level.resE * 100);
+        const otherYears = found.years.filter(year => year !== found.year);
+
+        const notes = [];
+
+        if (Number.isFinite(found.lidarYear)) {
+            notes.push(`LiDAR ${found.lidarYear}`);
+        }
+
+        if (otherYears.length) {
+            notes.push(`also available: ${otherYears.join(", ")}`);
+        }
+
+        setStatus(
+            `SWISSIMAGE ${found.year} GeoTIFF ready: ` +
+            `${level.width.toLocaleString()} × ${level.height.toLocaleString()} px, ${cm} cm/px` +
+            (notes.length ? ` (${notes.join("; ")})` : "") +
+            "."
+        );
+
+        return true;
+    } finally {
+        SWISSIMAGE_RGB.loading = false;
+        hideSwissImageProgress();
+    }
+}
+
 async function prepareSwissImageRaster() {
+    if (SWISSIMAGE_RGB.loading) {
+        while (SWISSIMAGE_RGB.loading) {
+            await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        return;
+    }
+
+    if (!currentTile?.bbox) {
+        throw new Error("Selected tile has no bbox.");
+    }
+
+    try {
+        if (await prepareSwissImageRasterDop10()) {
+            return;
+        }
+    } catch (error) {
+        console.warn("[swiss-copc] SWISSIMAGE GeoTIFF failed, using WMTS tiles:", error);
+    }
+
+    await prepareSwissImageRasterWmts();
+
+    if (SWISSIMAGE_RGB.raster) {
+        setStatus(
+            "No SWISSIMAGE GeoTIFF for this tile - using the WMTS map tiles " +
+            "(reprojected, may be a different flight)."
+        );
+    }
+}
+
+/* Fallback: WMTS map tiles in Web Mercator. */
+async function prepareSwissImageRasterWmts() {
     if (SWISSIMAGE_RGB.loading) {
         while (SWISSIMAGE_RGB.loading) {
             await new Promise(resolve =>
@@ -2253,7 +2594,7 @@ async function prepareSwissImageRaster() {
          * If the requested zoom would exceed MAX_RASTER_PIXELS the
          * zoom is lowered until it fits.
          */
-        const MAX_RASTER_PIXELS = 160 * 1024 * 1024;
+        const MAX_RASTER_PIXELS = SWISSIMAGE_MAX_RASTER_PIXELS;
         const tileSize = SWISSIMAGE_RGB.tileSize;
         const requestedZoom = SWISSIMAGE_RGB.zoom;
 
@@ -2915,6 +3256,13 @@ function getSwissMapper(raster) {
         maxN = Math.max(...corners.map(c => c[1])) + pad;
     }
 
+    // LV95 GeoTIFF: points map to pixels directly, no grid needed
+    if (raster.kind === "lv95") {
+        raster.stats = { points: 0, outside: 0 };
+        raster.mapper = { direct: true, N: 1, minE, maxE, minN, maxN };
+        return raster.mapper;
+    }
+
     const N = 24;
     const gx = new Float64Array((N + 1) * (N + 1));
     const gy = new Float64Array((N + 1) * (N + 1));
@@ -3113,6 +3461,12 @@ function colorNodeSync(sceneNode, raster, mapper, treeNode) {
     const width = raster.width;
     const height = raster.height;
 
+    const direct = !!mapper.direct;
+    const originE = raster.originE;
+    const originN = raster.originN;
+    const invResE = direct ? 1 / raster.resE : 0;
+    const invResN = direct ? 1 / raster.resN : 0;
+
     let outside = 0;
 
     for (let i = 0; i < count; i++) {
@@ -3126,33 +3480,41 @@ function colorNodeSync(sceneNode, raster, mapper, treeNode) {
         const worldX = e[0] * x + e[4] * y + e[8] * z + e[12];
         const worldY = e[1] * x + e[5] * y + e[9] * z + e[13];
 
-        let u = (worldX - minE) * invE;
-        let v = (worldY - minN) * invN;
+        let ix, iy;
 
-        if (u < 0) u = 0; else if (u > N - 1e-9) u = N - 1e-9;
-        if (v < 0) v = 0; else if (v > N - 1e-9) v = N - 1e-9;
+        if (direct) {
+            // LV95 GeoTIFF: plain arithmetic
+            ix = Math.floor((worldX - originE) * invResE);
+            iy = Math.floor((originN - worldY) * invResN);
+        } else {
+            let u = (worldX - minE) * invE;
+            let v = (worldY - minN) * invN;
 
-        const gi = Math.floor(u);
-        const gj = Math.floor(v);
-        const fu = u - gi;
-        const fv = v - gj;
-        const k = gj * stride + gi;
+            if (u < 0) u = 0; else if (u > N - 1e-9) u = N - 1e-9;
+            if (v < 0) v = 0; else if (v > N - 1e-9) v = N - 1e-9;
 
-        const w00 = (1 - fu) * (1 - fv);
-        const w10 = fu * (1 - fv);
-        const w01 = (1 - fu) * fv;
-        const w11 = fu * fv;
+            const gi = Math.floor(u);
+            const gj = Math.floor(v);
+            const fu = u - gi;
+            const fv = v - gj;
+            const k = gj * stride + gi;
 
-        const mx =
-            gx[k] * w00 + gx[k + 1] * w10 +
-            gx[k + stride] * w01 + gx[k + stride + 1] * w11;
+            const w00 = (1 - fu) * (1 - fv);
+            const w10 = fu * (1 - fv);
+            const w01 = (1 - fu) * fv;
+            const w11 = fu * fv;
 
-        const my =
-            gy[k] * w00 + gy[k + 1] * w10 +
-            gy[k + stride] * w01 + gy[k + stride + 1] * w11;
+            const mx =
+                gx[k] * w00 + gx[k + 1] * w10 +
+                gx[k + stride] * w01 + gx[k + stride + 1] * w11;
 
-        const ix = Math.floor((mx - worldMinX) * scaleX);
-        const iy = Math.floor((worldMaxY - my) * scaleY);
+            const my =
+                gy[k] * w00 + gy[k + 1] * w10 +
+                gy[k + stride] * w01 + gy[k + stride + 1] * w11;
+
+            ix = Math.floor((mx - worldMinX) * scaleX);
+            iy = Math.floor((worldMaxY - my) * scaleY);
+        }
 
         const c = i * 4;
 

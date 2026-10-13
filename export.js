@@ -286,6 +286,31 @@
         colourNote = swissTileNote(raster);
 
         const pixels = raster.rgb;
+        const out = [128, 128, 128];
+
+        // LV95 GeoTIFF: no reprojection, points map to pixels directly
+        if (raster.kind === "lv95") {
+            const invResE = 1 / raster.resE;
+            const invResN = 1 / raster.resN;
+
+            const sampleDirect = (e, n) => {
+                const ix = Math.floor((e - raster.originE) * invResE);
+                const iy = Math.floor((raster.originN - n) * invResN);
+
+                if (ix < 0 || iy < 0 || ix >= raster.width || iy >= raster.height) {
+                    out[0] = out[1] = out[2] = 128;
+                    return out;
+                }
+
+                const p = (iy * raster.width + ix) * 3;
+                out[0] = pixels[p];
+                out[1] = pixels[p + 1];
+                out[2] = pixels[p + 2];
+                return out;
+            };
+
+            return { sample: sampleDirect, raster };
+        }
 
         // LV95 -> Web Mercator on a coarse grid; bilinear in between.
         // Over one tile this is accurate to far below one pixel and avoids
@@ -315,7 +340,6 @@
 
         const scaleX = raster.width / (raster.worldMaxX - raster.worldMinX);
         const scaleY = raster.height / (raster.worldMaxY - raster.worldMinY);
-        const out = [128, 128, 128];
 
         // Returns [r, g, b] (0-255) for an LV95 coordinate; array is reused.
         function sample(e, n) {

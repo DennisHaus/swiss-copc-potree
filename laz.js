@@ -655,29 +655,42 @@
         const pos = d.pos;
         const [ox, oy] = d.origin;
 
+        // LV95 GeoTIFF: points map to pixels directly
+        const direct = !!mapper.direct;
+        const invResE = direct ? 1 / raster.resE : 0;
+        const invResN = direct ? 1 / raster.resN : 0;
+
         let outside = 0;
 
         for (let start = 0; start < d.count; start += 500000) {
             const end = Math.min(start + 500000, d.count);
 
             for (let i = start; i < end; i++) {
-                let u = (ox + pos[i * 3] - minE) * invE;
-                let v = (oy + pos[i * 3 + 1] - minN) * invN;
+                let ix, iy;
 
-                if (u < 0) u = 0; else if (u > N - 1e-9) u = N - 1e-9;
-                if (v < 0) v = 0; else if (v > N - 1e-9) v = N - 1e-9;
+                if (direct) {
+                    ix = Math.floor((ox + pos[i * 3] - raster.originE) * invResE);
+                    iy = Math.floor((raster.originN - oy - pos[i * 3 + 1]) * invResN);
+                } else {
+                    let u = (ox + pos[i * 3] - minE) * invE;
+                    let v = (oy + pos[i * 3 + 1] - minN) * invN;
 
-                const gi = Math.floor(u), gj = Math.floor(v);
-                const fu = u - gi, fv = v - gj;
-                const k = gj * stride + gi;
-                const w00 = (1 - fu) * (1 - fv), w10 = fu * (1 - fv);
-                const w01 = (1 - fu) * fv, w11 = fu * fv;
+                    if (u < 0) u = 0; else if (u > N - 1e-9) u = N - 1e-9;
+                    if (v < 0) v = 0; else if (v > N - 1e-9) v = N - 1e-9;
 
-                const mx = gx[k] * w00 + gx[k + 1] * w10 + gx[k + stride] * w01 + gx[k + stride + 1] * w11;
-                const my = gy[k] * w00 + gy[k + 1] * w10 + gy[k + stride] * w01 + gy[k + stride + 1] * w11;
+                    const gi = Math.floor(u), gj = Math.floor(v);
+                    const fu = u - gi, fv = v - gj;
+                    const k = gj * stride + gi;
+                    const w00 = (1 - fu) * (1 - fv), w10 = fu * (1 - fv);
+                    const w01 = (1 - fu) * fv, w11 = fu * fv;
 
-                const ix = Math.floor((mx - raster.worldMinX) * scaleX);
-                const iy = Math.floor((raster.worldMaxY - my) * scaleY);
+                    const mx = gx[k] * w00 + gx[k + 1] * w10 + gx[k + stride] * w01 + gx[k + stride + 1] * w11;
+                    const my = gy[k] * w00 + gy[k + 1] * w10 + gy[k + stride] * w01 + gy[k + stride + 1] * w11;
+
+                    ix = Math.floor((mx - raster.worldMinX) * scaleX);
+                    iy = Math.floor((raster.worldMaxY - my) * scaleY);
+                }
+
                 const c = i * 4;
 
                 if (ix < 0 || iy < 0 || ix >= raster.width || iy >= raster.height) {

@@ -173,20 +173,14 @@
        SWISSIMAGE resolution
        ------------------------------------------------------------ */
 
-    // Ground size of one WMTS pixel (Web Mercator) at a latitude.
-    function groundResolution(zoom, latitude) {
-        return (156543.03392804097 / Math.pow(2, zoom)) *
-            Math.cos((latitude * Math.PI) / 180);
-    }
-
+    /*
+     * The slider keeps its zoom scale: 20 = 10 cm (native GeoTIFF),
+     * 19 = 20 cm, 18 = 40 cm ... For tiles without a GeoTIFF the WMTS
+     * map tiles are used at the same zoom (about the same resolution).
+     */
     function swissInfoText(zoom) {
-        const bbox = currentTile?.bbox;
-        const latitude = Array.isArray(bbox) ? (bbox[1] + bbox[3]) / 2 : 46.8;
-        const res = groundResolution(zoom, latitude);
-
-        const pixelsPerSide = 1000 / res;
-        const tilesPerSide = Math.ceil(pixelsPerSide / 256) + 1;
-        const side = tilesPerSide * 256;
+        const res = 0.1 * Math.pow(2, 20 - zoom);
+        const side = Math.round(1000 / res);
         const megabytes = (side * side * 3) / 1e6;
 
         const cm = res * 100;
@@ -195,8 +189,8 @@
         return {
             label: `${resText}/px${zoom >= 20 ? " (native)" : ""}`,
             info:
-                `About ${(side / 1000).toFixed(1)}k × ${(side / 1000).toFixed(1)} px, ` +
-                `${(tilesPerSide * tilesPerSide).toLocaleString()} map tiles to download, ` +
+                `SWISSIMAGE 10 cm GeoTIFF of the tile (LV95), about ` +
+                `${(side / 1000).toFixed(1)}k × ${(side / 1000).toFixed(1)} px, ` +
                 `${megabytes >= 1000 ? (megabytes / 1000).toFixed(1) + " GB" : Math.round(megabytes) + " MB"} memory. ` +
                 `Also used for the export.`
         };

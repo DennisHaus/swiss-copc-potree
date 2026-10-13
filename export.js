@@ -613,10 +613,15 @@
                 throw new Error("COPC point data has no X/Y/Z dimensions.");
             }
 
+            // "ground points only" filter of the viewer also applies to the export
+            const groundOnly = !!(window.swissColor?.settings.groundOnly && classification);
+            const groundClasses = window.swissColor?.groundClasses;
+
             for (let i = 0; i < count; i++) {
                 const x = X(i), y = Y(i), z = Z(i);
 
                 if (filter && !filter.contains(x, y, z)) continue;
+                if (groundOnly && !groundClasses[classification(i)]) continue;
 
                 let r = 0, g = 0, b = 0;
 
@@ -717,6 +722,7 @@
 
         const fmt = header.format;
         const ext = fmt >= 6;
+        const lazGroundOnly = !!window.swissColor?.settings.groundOnly;
         const rec = header.recordLength;
         const [sx, sy, sz] = header.scale;
         const [ox, oy, oz] = header.offset;
@@ -763,6 +769,8 @@
                     angle = Math.round(dv.getInt8(p + 16) / 0.006);
                     src = dv.getUint16(p + 18, true);
                 }
+
+                if (lazGroundOnly && !window.swissColor.groundClasses[cls]) continue;
 
                 let r = 0, g = 0, b = 0;
 

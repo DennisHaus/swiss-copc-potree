@@ -36,10 +36,15 @@
         // raster colouring (colorsource.js)
         colorSource: "swissimage",
         colorTimes: {},          // chosen year per map source
-        colorApply: "all",
+        groundOnly: false,       // filter: ground / water points only
         occlusion: true,
+        leanAuto: true,
         leanX: 0,                // metres of shift per 10 m of height
-        leanY: 0
+        leanY: 0,
+        layerId: "",             // geo.admin.ch layer (natural hazards, ...)
+        layerLabel: "",
+        wmsUrl: "",
+        wmsLayer: ""
     };
 
     let settings = loadSettings();
@@ -117,6 +122,8 @@
 
     // Called by app.js whenever a point cloud is configured.
     window.applyAppearance = function (pointcloud) {
+        window.swissColor?.groundOnlyChanged();
+
         if (pointcloud) {
             applyToPointCloud(pointcloud);
         } else {
@@ -249,17 +256,25 @@
         const c = window.swissColor?.settings;
         if (!c) return;
 
-        // a picked file cannot be restored after a reload
-        const source = settings.colorSource === "local" && !window.swissColor.local.tif
-            ? "swissimage"
-            : settings.colorSource;
+        // sources that are not ready yet (no file / layer chosen) stay on SWISSIMAGE
+        const notReady =
+            (settings.colorSource === "local" && !window.swissColor.local.tif) ||
+            (settings.colorSource === "geoadmin" && !settings.layerId) ||
+            (settings.colorSource === "wms" && !(settings.wmsUrl && settings.wmsLayer));
+
+        const source = notReady ? "swissimage" : settings.colorSource;
 
         c.source = source;
         c.time = settings.colorTimes?.[source] || "";
-        c.apply = settings.colorApply;
+        c.groundOnly = settings.groundOnly;
         c.occlusion = settings.occlusion;
+        c.leanAuto = settings.leanAuto;
         c.leanX = settings.leanX / 10;
         c.leanY = settings.leanY / 10;
+        c.layerId = settings.layerId;
+        c.layerLabel = settings.layerLabel;
+        c.wmsUrl = settings.wmsUrl;
+        c.wmsLayer = settings.wmsLayer;
     }
 
     async function refreshTimeOptions() {
@@ -323,9 +338,20 @@
 
         // the select shows the choice even before a file is picked
         if (el("color-source")) el("color-source").value = settings.colorSource;
-        if (el("color-apply")) el("color-apply").value = c.apply;
-        if (el("color-occlusion")) el("color-occlusion").checked = c.occlusion;
+        if (el("ground-only")) el("ground-only").checked = settings.groundOnly;
+        if (el("color-occlusion")) el("color-occlusion").checked = settings.occlusion;
+        if (el("lean-auto")) el("lean-auto").checked = settings.leanAuto;
+        if (el("lean-manual")) el("lean-manual").hidden = settings.leanAuto;
+        if (el("lean-estimate")) el("lean-estimate").hidden = !settings.leanAuto;
         if (el("color-local-row")) el("color-local-row").hidden = settings.colorSource !== "local";
+        if (el("color-geoadmin-row")) el("color-geoadmin-row").hidden = settings.colorSource !== "geoadmin";
+        if (el("color-wms-row")) el("color-wms-row").hidden = settings.colorSource !== "wms";
+        if (el("wms-url") && !el("wms-url").value) el("wms-url").value = settings.wmsUrl || "";
+        if (el("wms-layer") && !el("wms-layer").value) el("wms-layer").value = settings.wmsLayer || "";
+
+        if (settings.layerId && el("layer-info") && settings.colorSource === "geoadmin") {
+            el("layer-info").textContent = `Shown: ${settings.layerLabel || settings.layerId} (${settings.layerId})`;
+        }
 
         for (const [key, id] of [["leanX", "swiss-lean-x"], ["leanY", "swiss-lean-y"]]) {
             if (el(id)) el(id).value = settings[key];
@@ -344,9 +370,11 @@
             settings.colorSource = source;
 
             // geology belongs on the terrain only
-            if (window.swissColor.sources[source]?.groundOnly && settings.colorApply === "all") {
-                settings.colorApply = "ground-grey";
-                setStatus("Geology is shown on ground points only (change under 'Apply raster to').");
+            if (window.swissColor.sources[source]?.groundOnly && !settings.groundOnly) {
+                settings.groundOnly = true;
+                window.swissColor.settings.groundOnly = true;
+                window.swissColor.groundOnlyChanged();
+                setStatus("Geology: only ground points are shown (untick 'Show ground points only' to see all).");
             }
 
             saveSettings();
@@ -358,6 +386,91 @@
                 return;
             }
 
+            // wait until a layer / WMS has been chosen
+            if (window.swissColor.settings.source !== source) {
+                if (source === "geoadmin") el("layer-search")?.focus();
+                return;
+            }
+
+            window.swissColor.sourceChanged();
+        });
+
+        /* geo.admin.ch layer search */
+        let searchToken = 0;
+
+        async function runLayerSearch(text) {
+            const select = el("layer-results");
+            const info = el("layer-info");
+            if (!select || !text.trim()) return;
+
+            const token = ++searchToken;
+            if (info) info.textContent = "Searching…";
+
+            try {
+                const results = await window.swissColor.searchLayers(text.trim());
+                if (token !== searchToken) return;
+
+                select.innerHTML = "";
+
+                for (const r of results) {
+                    const option = document.createElement("option");
+                    option.value = r.id;
+                    option.textContent = r.label || r.id;
+                    option.title = r.id;
+                    select.appendChild(option);
+                }
+
+                if (info) {
+                    info.textContent = results.length
+                        ? `${results.length} layer(s) - pick one to colour the ground points.`
+                        : "No layers found.";
+                }
+            } catch (error) {
+                if (info) info.textContent = error.message;
+            }
+        }
+
+        document.querySelectorAll("[data-layer-search]").forEach(button => {
+            button.addEventListener("click", () => {
+                const text = button.dataset.layerSearch;
+                if (el("layer-search")) el("layer-search").value = text;
+                void runLayerSearch(text);
+            });
+        });
+
+        let searchTimer = null;
+
+        el("layer-search")?.addEventListener("input", event => {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(() => runLayerSearch(event.target.value), 350);
+        });
+
+        el("layer-results")?.addEventListener("change", event => {
+            const option = event.target.selectedOptions[0];
+            if (!option) return;
+
+            settings.colorSource = "geoadmin";
+            settings.layerId = option.value;
+            settings.layerLabel = option.textContent;
+            saveSettings();
+            pushColorSettings();
+            syncColorControls();
+            window.swissColor.sourceChanged();
+        });
+
+        el("wms-apply")?.addEventListener("click", () => {
+            settings.colorSource = "wms";
+            settings.wmsUrl = el("wms-url")?.value.trim() || "";
+            settings.wmsLayer = el("wms-layer")?.value.trim() || "";
+
+            if (!settings.wmsUrl || !settings.wmsLayer) {
+                setStatus("Please enter the WMS URL and the layer name.");
+                return;
+            }
+
+            saveSettings();
+            pushColorSettings();
+            syncColorControls();
             window.swissColor.sourceChanged();
         });
 
@@ -411,11 +524,29 @@
             window.swissColor.sourceChanged();
         });
 
-        el("color-apply")?.addEventListener("change", event => {
-            settings.colorApply = event.target.value;
+        el("ground-only")?.addEventListener("change", event => {
+            settings.groundOnly = event.target.checked;
             saveSettings();
             pushColorSettings();
+            window.swissColor.groundOnlyChanged();
+        });
+
+        el("lean-auto")?.addEventListener("change", event => {
+            settings.leanAuto = event.target.checked;
+            saveSettings();
+            pushColorSettings();
+            syncColorControls();
             window.swissColor.rulesChanged();
+        });
+
+        el("lean-estimate")?.addEventListener("click", () => {
+            if (el("lean-info")) el("lean-info").textContent = "Estimating…";
+            window.swissColor.estimateLean();
+        });
+
+        window.addEventListener("swiss-lean-estimate", event => {
+            if (el("lean-info")) el("lean-info").textContent = event.detail.text;
+            setStatus(event.detail.text);
         });
 
         el("color-occlusion")?.addEventListener("change", event => {
@@ -565,6 +696,7 @@
             applyViewerSettings();
             pushColorSettings();
             syncColorControls();
+            window.swissColor?.groundOnlyChanged();
             window.swissColor?.sourceChanged();
             applySwissZoom();
             setStatus("Appearance reset.");

@@ -2055,6 +2055,11 @@ function swissImageFrame() {
         swissGroundRefresh(grids, true);
     }
 
+    // tower lean from the roof edges (once per raster, or on request)
+    if (SWISS_COLOR.leanAuto && !raster.leanEstimate) {
+        swissUpdateLeanEstimate(raster, mapper);
+    }
+
     const start = performance.now();
 
     let pendingVisible = false;
@@ -2554,6 +2559,9 @@ async function prepareSwissImageRaster() {
     if (!currentTile?.bbox) {
         throw new Error("Selected tile has no bbox.");
     }
+
+    // terrain for "height above ground" (lean, walls): swissALTI3D
+    await swissEnsureAlti();
 
     // other colour sources (maps, 1946, own file): see colorsource.js
     if (swissSource().type !== "dop10") {

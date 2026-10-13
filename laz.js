@@ -636,36 +636,43 @@
         }
 
         const raster = SWISSIMAGE_RGB.raster;
+        const mapper = getSwissMapper(raster);
+        const grids = getSwissGrids(mapper);
+
+        const pos = d.pos;
+        const cls = d.cls || null;
+        const [ox, oy, oz] = d.origin;
+
+        // the whole tile is in memory: complete ground / top grids first
+        if (!grids.fed.has(d)) {
+            grids.fed.add(d);
+
+            for (let i = 0; i < d.count; i++) {
+                swissGridsAdd(
+                    grids,
+                    ox + pos[i * 3], oy + pos[i * 3 + 1], oz + pos[i * 3 + 2],
+                    cls ? cls[i] : -1
+                );
+            }
+
+            if (cls) grids.hasClasses = true;
+        }
+
+        swissGroundRefresh(grids, true);
+
+        // tower lean from the roof edges (once per raster, or on request)
+        if (SWISS_COLOR.leanAuto && !raster.leanEstimate) {
+            swissUpdateLeanEstimate(raster, mapper);
+        }
+
         const colorKey = swissColorKey(raster);
 
         if (d.swissRasterId === colorKey && d.swissRgba) {
             return;
         }
 
-        const mapper = getSwissMapper(raster);
         const ctx = swissColorContext(raster, mapper);
-
         const rgba = d.swissRgba || new Uint8Array(d.count * 4);
-        const pos = d.pos;
-        const cls = d.cls || null;
-        const [ox, oy, oz] = d.origin;
-
-        // the whole tile is in memory: complete ground / top grids first
-        if (!ctx.grids.fed.has(d)) {
-            ctx.grids.fed.add(d);
-
-            for (let i = 0; i < d.count; i++) {
-                swissGridsAdd(
-                    ctx.grids,
-                    ox + pos[i * 3], oy + pos[i * 3 + 1], oz + pos[i * 3 + 2],
-                    cls ? cls[i] : -1
-                );
-            }
-
-            if (cls) ctx.grids.hasClasses = true;
-        }
-
-        swissGroundRefresh(ctx.grids, true);
 
         let outside = 0;
 
@@ -717,11 +724,22 @@
         uniform float uDpr;
         uniform float uClipOn;
         uniform mat4 uClipInv;    // local point space -> section box space
+        uniform float uGroundOnly;
         attribute vec4 aColor;
+        attribute float aGround;  // 1 = ground / water class
         varying vec4 vColor;
         varying float vClipped;
 
         void main() {
+            // ground-only filter: move hidden points out of the view volume
+            if (uGroundOnly > 0.5 && aGround < 0.5) {
+                gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
+                gl_PointSize = 0.0;
+                vColor = vec4(0.0);
+                vClipped = 1.0;
+                return;
+            }
+
             vec4 mv = modelViewMatrix * vec4(position, 1.0);
             gl_Position = projectionMatrix * mv;
 
@@ -772,6 +790,20 @@
         setAttr(geometry, "position", new THREE.BufferAttribute(data.pos, 3));
         setAttr(geometry, "aColor", new THREE.BufferAttribute(data.color, 4, true));
 
+        // ground / water flag per point, for the ground-only filter
+        const groundFlag = new Uint8Array(data.count);
+        const groundClasses = window.swissColor?.groundClasses;
+
+        if (data.cls && groundClasses) {
+            for (let i = 0; i < data.count; i++) {
+                groundFlag[i] = groundClasses[data.cls[i]] ? 255 : 0;
+            }
+        } else {
+            groundFlag.fill(255);   // no classes: nothing can be filtered
+        }
+
+        setAttr(geometry, "aGround", new THREE.BufferAttribute(groundFlag, 1, true));
+
         const material = new THREE.ShaderMaterial({
             uniforms: {
                 uSize: { value: 1.5 },
@@ -782,7 +814,8 @@
                 uShape: { value: 1 },
                 uOpacity: { value: 1 },
                 uClipOn: { value: 0 },
-                uClipInv: { value: new THREE.Matrix4() }
+                uClipInv: { value: new THREE.Matrix4() },
+                uGroundOnly: { value: window.swissColor?.settings.groundOnly ? 1 : 0 }
             },
             vertexShader: VERTEX,
             fragmentShader: FRAGMENT
@@ -875,6 +908,10 @@
                 console.error("[laz] colouring failed:", error);
                 setStatus(`Colouring failed: ${error.message}`);
             }
+        };
+
+        points.lazSetGroundOnly = function (on) {
+            material.uniforms.uGroundOnly.value = on ? 1 : 0;
         };
 
         // Appearance settings from ui.js

@@ -197,12 +197,41 @@
                         <option value="siegfried">Siegfried map (1870–1949)</option>
                         <option value="dufour">Dufour map (1845–1939)</option>
                         <option value="geology">Geological atlas GA25</option>
+                        <option value="geocover">GeoCover (geological vector data)</option>
+                        <option value="geoadmin">Natural hazards, protection forest, other geo.admin.ch layers…</option>
+                        <option value="wms">WMS layer (e.g. cantonal hazard map)…</option>
                         <option value="local">Own GeoTIFF / TIFF + TFW…</option>
                     </select>
 
                     <div id="color-time-row" hidden>
                         <label for="color-time" class="control-label">Year / edition</label>
                         <select id="color-time"></select>
+                    </div>
+
+                    <div id="color-geoadmin-row" hidden>
+                        <div class="layer-quick">
+                            <button type="button" data-layer-search="Gefahren">Natural hazards</button>
+                            <button type="button" data-layer-search="Schutzwald">Protection forest</button>
+                            <button type="button" data-layer-search="SilvaProtect">SilvaProtect</button>
+                        </div>
+                        <input id="layer-search" type="search" placeholder="Search geo.admin.ch layers…">
+                        <select id="layer-results" size="6"></select>
+                        <div id="layer-info" class="section-info">
+                            Federal layers. Detailed hazard maps are made by the cantons -
+                            use "WMS layer" with your canton's geoportal for those.
+                        </div>
+                    </div>
+
+                    <div id="color-wms-row" hidden>
+                        <label for="wms-url" class="control-label">WMS URL</label>
+                        <input id="wms-url" type="url" placeholder="https://…/wms">
+                        <label for="wms-layer" class="control-label">Layer name(s)</label>
+                        <input id="wms-layer" type="text" placeholder="layer1,layer2">
+                        <button id="wms-apply" type="button">Load</button>
+                        <div class="section-info">
+                            Must support EPSG:2056 and allow web apps (CORS). Layer names are listed in
+                            the service's GetCapabilities.
+                        </div>
                     </div>
 
                     <div id="color-local-row" hidden>
@@ -221,12 +250,7 @@
                 </div>
 
                 <div class="ctrl">
-                    <label for="color-apply" class="control-label">Apply raster to</label>
-                    <select id="color-apply">
-                        <option value="all">All points</option>
-                        <option value="ground-class">Ground only, rest by classification</option>
-                        <option value="ground-grey">Ground only, rest grey</option>
-                    </select>
+                    <label><input id="ground-only" type="checkbox"> Show ground points only (hide all other classes)</label>
                     <label><input id="color-occlusion" type="checkbox"> Neutral colour for walls (not visible from above)</label>
                 </div>
 
@@ -237,6 +261,10 @@
                 </div>
 
                 <div class="ctrl swiss-lean">
+                    <label><input id="lean-auto" type="checkbox"> Correct tower lean automatically</label>
+                    <button id="lean-estimate" type="button">Estimate again</button>
+                    <div id="lean-info" class="section-info"></div>
+                    <div id="lean-manual">
                     <label for="swiss-lean-x">Tower lean east–west <output id="swiss-lean-x-out"></output></label>
                     <input id="swiss-lean-x" type="range" min="-5" max="5" step="0.05">
                     <label for="swiss-lean-y">Tower lean north–south <output id="swiss-lean-y-out"></output></label>
@@ -245,6 +273,7 @@
                         Orthophotos are rectified on the terrain, so towers lean away from the camera.
                         If a tower's colour sits east of the tower, move east–west to the right
                         (value = metres per 10 m of height). Double-click a slider to reset it.
+                    </div>
                     </div>
                 </div>
             </div>

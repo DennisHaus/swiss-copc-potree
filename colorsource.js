@@ -10,21 +10,32 @@
  *   siegfried    Siegfried map, with year        (WMTS)
  *   dufour       Dufour map, with edition        (WMTS)
  *   geology      Geological atlas GA25           (WMTS)
+ *   geocover     GeoCover                        (WMTS)
+ *   geoadmin     any layer of the federal geoportal, found by search
+ *                (natural hazards, protection forest, ...): LV95 WMTS if
+ *                the layer has tiles, otherwise WMS
+ *   wms          any WMS (e.g. a cantonal geoportal's hazard map)
  *   local        your own GeoTIFF, or TIFF + TFW (e.g. SWISSIMAGE RS)
  *
- * Point rules applied on top of any source (SWISS_COLOR, set by ui.js):
+ * Height above ground comes from swissALTI3D (0.5 m terrain model of the
+ * same tile, the model SWISSIMAGE itself is rectified on). Only where it is
+ * missing, the LiDAR ground points are used instead.
  *
- *   apply      "all"          every point from the raster
- *              "ground-class" only ground/water from the raster, the rest
- *                             by classification colour
- *              "ground-grey"  only ground/water from the raster, the rest grey
- *   occlusion  building/bridge points lying well below the highest point
- *              of their 1 m cell (walls, eaves) cannot be seen in a top view
- *              and get a neutral colour instead of roof/ground colour
- *   leanX/Y    relief-displacement correction: the image is sampled at
- *              (E + leanX * h, N + leanY * h), h = height above ground.
- *              Orthophotos are rectified on the terrain, so tall objects
- *              (church towers) are drawn displaced away from the camera.
+ * Settings (SWISS_COLOR, set by ui.js):
+ *
+ *   groundOnly  filter: hide every point that is not ground (2) or water (9)
+ *   occlusion   building points lying more than 3 m below the highest point
+ *               of their 0.5 m cell (walls) cannot be seen in a top view and
+ *               get a neutral colour instead of roof/ground colour
+ *   leanAuto    estimate the relief displacement from the data (see below)
+ *   leanX/Y     manual displacement when leanAuto is off
+ *
+ * Relief displacement: orthophotos are rectified on the terrain, so tall
+ * objects (church towers) are drawn displaced away from the camera, by
+ * about height x (distance from nadir / flying height). A point h metres
+ * above the ground is therefore coloured from (E + lx * h, N + ly * h).
+ * lx/ly are estimated per 250 m block by moving the LiDAR roof outlines
+ * over the image until they match its edges best.
  *
  * Loaded after app.js. Uses its globals (CONFIG, currentTile, proj4, ...).
  */
@@ -63,6 +74,22 @@ const SWISS_SOURCES = {
         layers: ["ch.swisstopo.geologie-geologischer_atlas"],
         groundOnly: true
     },
+    geocover: {
+        label: "GeoCover (geological vector data)",
+        type: "wmts",
+        layers: ["ch.swisstopo.geologie-geocover"],
+        groundOnly: true
+    },
+    geoadmin: {
+        label: "geo.admin.ch layer",
+        type: "geoadmin",
+        groundOnly: true
+    },
+    wms: {
+        label: "WMS layer",
+        type: "wms",
+        groundOnly: true
+    },
     local: {
         label: "Own GeoTIFF / TIFF + TFW",
         type: "local"
@@ -78,10 +105,15 @@ if (window.CONFIG && CONFIG.COLOR_SOURCES) {
 const SWISS_COLOR = {
     source: "swissimage",
     time: "",            // WMTS time ("" = layer default)
-    apply: "all",
+    groundOnly: false,   // filter: show ground / water points only
     occlusion: true,
-    leanX: 0,            // metres of image shift per metre of height
-    leanY: 0
+    leanAuto: true,      // estimate the tower lean from the data
+    leanX: 0,            // manual lean: metres of image shift per metre of height
+    leanY: 0,
+    layerId: "",         // geoadmin: layer id, e.g. ch.bafu.landesforstinventar-schutzwaldregionen
+    layerLabel: "",
+    wmsUrl: "",          // wms: service URL
+    wmsLayer: ""         // wms: layer name(s), comma separated
 };
 
 const SWISS_LOCAL = {
@@ -109,15 +141,24 @@ function swissSourceKey() {
         return `${SWISS_COLOR.source}:${SWISS_COLOR.time}`;
     }
 
+    if (source.type === "geoadmin") {
+        return `geoadmin:${SWISS_COLOR.layerId}`;
+    }
+
+    if (source.type === "wms") {
+        return `wms:${SWISS_COLOR.wmsUrl}|${SWISS_COLOR.wmsLayer}`;
+    }
+
     return SWISS_COLOR.source;
 }
 
 /* Raster + point rules: a different key needs recolouring only. */
 function swissColorKey(raster) {
-    return (
-        `${raster.id}|${SWISS_COLOR.apply}|occ:${SWISS_COLOR.occlusion ? 1 : 0}` +
-        `|lean:${SWISS_COLOR.leanX},${SWISS_COLOR.leanY}`
-    );
+    const lean = SWISS_COLOR.leanAuto
+        ? `auto:${raster.leanEstimate ? raster.leanEstimate.id : "none"}`
+        : `${SWISS_COLOR.leanX},${SWISS_COLOR.leanY}`;
+
+    return `${raster.id}|occ:${SWISS_COLOR.occlusion ? 1 : 0}|lean:${lean}`;
 }
 
 /* LV95 extent of the current tile (+ pad), for loading rasters. */
@@ -396,6 +437,298 @@ async function prepareWmtsLv95Raster(source) {
 }
 
 /* ============================================================
+   WMS (federal geoportal fallback, cantonal geoportals)
+   ============================================================ */
+
+const SWISS_GEOADMIN_WMS = "https://wms.geo.admin.ch/";
+const SWISS_WMS_CHUNK = 2048;     // px per request (servers limit the size)
+
+function swissWmsUrl(base, layers, box, width, height) {
+    const url = new URL(base);
+
+    const params = {
+        SERVICE: "WMS",
+        VERSION: "1.3.0",
+        REQUEST: "GetMap",
+        LAYERS: layers,
+        STYLES: "",
+        CRS: "EPSG:2056",
+        // EPSG:2056 axis order is east, north
+        BBOX: [box.minE, box.minN, box.maxE, box.maxN].join(","),
+        WIDTH: String(width),
+        HEIGHT: String(height),
+        FORMAT: "image/png",
+        TRANSPARENT: "TRUE"
+    };
+
+    for (const [key, value] of Object.entries(params)) {
+        // keep parameters the user put into the URL (e.g. a map= path), replace ours
+        for (const existing of [...url.searchParams.keys()]) {
+            if (existing.toUpperCase() === key) url.searchParams.delete(existing);
+        }
+        url.searchParams.set(key, value);
+    }
+
+    return url.toString();
+}
+
+async function prepareWmsRaster(base, layers, label) {
+    if (!base || !layers) {
+        throw new Error("WMS URL or layer missing.");
+    }
+
+    const extent = swissTileExtentLV95();
+    // vector maps: 0.5 m is plenty; follow the slider when it asks for less
+    const res = Math.max(0.5, swissTargetResolution());
+    const width = Math.ceil((extent.maxE - extent.minE) / res);
+    const height = Math.ceil((extent.maxN - extent.minN) / res);
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const context = canvas.getContext("2d", { willReadFrequently: true });
+
+    const jobs = [];
+
+    for (let y = 0; y < height; y += SWISS_WMS_CHUNK) {
+        for (let x = 0; x < width; x += SWISS_WMS_CHUNK) {
+            const w = Math.min(SWISS_WMS_CHUNK, width - x);
+            const h = Math.min(SWISS_WMS_CHUNK, height - y);
+
+            jobs.push({
+                x, y, w, h,
+                box: {
+                    minE: extent.minE + x * res,
+                    maxE: extent.minE + (x + w) * res,
+                    maxN: extent.maxN - y * res,
+                    minN: extent.maxN - (y + h) * res
+                }
+            });
+        }
+    }
+
+    let failed = 0;
+    let done = 0;
+
+    showSwissImageProgress(0, jobs.length, `Loading ${label}…`);
+
+    await Promise.all(jobs.map(async job => {
+        const img = await loadTileImage(swissWmsUrl(base, layers, job.box, job.w, job.h));
+
+        if (img) {
+            context.drawImage(img, job.x, job.y, job.w, job.h);
+        } else {
+            failed++;
+        }
+
+        showSwissImageProgress(++done, jobs.length, `Loading ${label}…`);
+    }));
+
+    hideSwissImageProgress();
+
+    if (failed === jobs.length) {
+        throw new Error(`${label}: the WMS returned no image (wrong URL/layer, or the server blocks web apps).`);
+    }
+
+    let rgba;
+
+    try {
+        rgba = context.getImageData(0, 0, width, height).data;
+    } catch (error) {
+        throw new Error(`${label}: the server does not allow web apps to read its images (CORS).`);
+    }
+
+    const n = width * height;
+    const rgb = new Uint8Array(n * 3);
+    const nodata = new Uint8Array(n);
+
+    for (let i = 0; i < n; i++) {
+        rgb[i * 3] = rgba[i * 4];
+        rgb[i * 3 + 1] = rgba[i * 4 + 1];
+        rgb[i * 3 + 2] = rgba[i * 4 + 2];
+        if (rgba[i * 4 + 3] < 128) nodata[i] = 1;
+    }
+
+    canvas.width = canvas.height = 0;
+
+    return {
+        kind: "lv95",
+        rgb,
+        nodata,
+        width,
+        height,
+        originE: extent.minE,
+        originN: extent.maxN,
+        resE: res,
+        resN: res,
+        failedTiles: failed,
+        fallbackTiles: 0,
+        label,
+        idPart: `wms-${base}-${layers}@${res}`
+    };
+}
+
+/* A geo.admin.ch layer: tiles if the LV95 WMTS has it, otherwise WMS. */
+async function prepareGeoadminRaster() {
+    const id = SWISS_COLOR.layerId;
+    const label = SWISS_COLOR.layerLabel || id;
+
+    if (!id) {
+        throw new Error("No layer chosen - search for a layer first.");
+    }
+
+    try {
+        const caps = await loadWmtsCapabilities();
+
+        if (caps.layers.has(id)) {
+            const raster = await prepareWmtsLv95Raster({ label, layers: [id] });
+            raster.label = label;
+            return raster;
+        }
+    } catch (error) {
+        console.warn("[colour] WMTS not usable, trying WMS:", error);
+    }
+
+    return prepareWmsRaster(SWISS_GEOADMIN_WMS, id, label);
+}
+
+/* Search the federal geoportal's layers (e.g. "Gefahren", "Schutzwald"). */
+async function swissSearchLayers(text) {
+    const url = new URL(CONFIG.SEARCH_URL || "https://api3.geo.admin.ch/rest/services/ech/SearchServer");
+
+    url.searchParams.set("searchText", text);
+    url.searchParams.set("type", "layers");
+    url.searchParams.set("lang", (navigator.language || "de").slice(0, 2));
+    url.searchParams.set("limit", "30");
+
+    const response = await fetch(url);
+
+    if (!response.ok) {
+        throw new Error(`Layer search failed (${response.status}).`);
+    }
+
+    const data = await response.json();
+
+    return (data.results || [])
+        .map(result => ({
+            id: result.attrs?.layer || result.attrs?.id || result.id,
+            label: String(result.attrs?.label || result.attrs?.title || "").replace(/<[^>]*>/g, "").trim()
+        }))
+        .filter(item => item.id && String(item.id).startsWith("ch."));
+}
+
+/* ============================================================
+   swissALTI3D TERRAIN (height above ground)
+   ============================================================ */
+
+const SWISS_ALTI = {
+    collection: "ch.swisstopo.swissalti3d",
+    key: null,
+    promise: null,
+    data: null,          // { z, width, height, originE, originN, invRes, year, res }
+    note: ""
+};
+
+async function swissFindAltiHref(tile) {
+    const id = typeof swissKmTileId === "function" ? swissKmTileId(tile) : null;
+    if (!id || !Array.isArray(tile?.bbox)) return null;
+
+    const [west, south, east, north] = tile.bbox;
+    const cx = (west + east) / 2, cy = (south + north) / 2, d = 0.0005;
+
+    const url = new URL(`${CONFIG.STAC_ROOT}/collections/${SWISS_ALTI.collection}/items`);
+    url.searchParams.set("bbox", [cx - d, cy - d, cx + d, cy + d].join(","));
+    url.searchParams.set("limit", "100");
+
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`swissALTI3D STAC request failed (${response.status})`);
+
+    const data = await response.json();
+    const lidarYear = typeof swissItemYear === "function" ? swissItemYear(tile) : NaN;
+    let best = null;
+
+    for (const item of data.features || []) {
+        if (!String(item.id || "").includes(id)) continue;
+
+        const year = typeof swissItemYear === "function" ? swissItemYear(item) : NaN;
+
+        for (const asset of Object.values(item.assets || {})) {
+            const href = asset?.href || "";
+            if (!/\.tiff?($|\?)/i.test(href)) continue;
+
+            const gsd = Number(asset["gsd"] ?? asset["eo:gsd"]) || (/_0\.5_/.test(href) ? 0.5 : /_2_/.test(href) ? 2 : 9);
+            const dYear = Number.isFinite(lidarYear) && Number.isFinite(year) ? Math.abs(year - lidarYear) : 0;
+            // finest model, closest to the LiDAR year (newer on a tie)
+            const rank = gsd * 100 + dYear - (Number.isFinite(year) ? year / 1e5 : 0);
+
+            if (!best || rank < best.rank) best = { href, year, gsd, rank };
+        }
+    }
+
+    return best;
+}
+
+/* Load the terrain of the current tile (once per tile; never throws). */
+function swissEnsureAlti() {
+    const key = currentTile ? tileKey(currentTile, 0) : "";
+
+    if (SWISS_ALTI.key === key && SWISS_ALTI.promise) {
+        return SWISS_ALTI.promise;
+    }
+
+    SWISS_ALTI.key = key;
+    SWISS_ALTI.data = null;
+    SWISS_ALTI.note = "";
+
+    SWISS_ALTI.promise = (async () => {
+        try {
+            if (typeof GeoTIFF === "undefined") throw new Error("geotiff.js is not loaded");
+
+            const found = await swissFindAltiHref(currentTile);
+            if (!found) throw new Error("no swissALTI3D tile found");
+
+            setStatus(`Loading swissALTI3D ${found.year} terrain…`);
+
+            const tiff = await GeoTIFF.fromUrl(found.href);
+            const image = await tiff.getImage(0);
+            const [left, , right, top] = image.getBoundingBox();
+            const width = image.getWidth();
+            const height = image.getHeight();
+            const raster = await image.readRasters({ samples: [0], interleave: true });
+            const noValue = image.getGDALNoData();
+
+            const z = raster instanceof Float32Array ? raster : Float32Array.from(raster);
+
+            if (noValue !== null && noValue !== undefined) {
+                for (let i = 0; i < z.length; i++) {
+                    if (z[i] === noValue) z[i] = NaN;
+                }
+            }
+
+            if (SWISS_ALTI.key !== key) return;   // tile changed meanwhile
+
+            const res = (right - left) / width;
+
+            SWISS_ALTI.data = {
+                z, width, height,
+                originE: left,
+                originN: top,
+                invRes: 1 / res,
+                res,
+                year: found.year
+            };
+            SWISS_ALTI.note = `swissALTI3D ${found.year} (${res} m)`;
+            console.info(`[colour] terrain: ${SWISS_ALTI.note}`);
+        } catch (error) {
+            SWISS_ALTI.note = `swissALTI3D unavailable (${error.message}) - using LiDAR ground points`;
+            console.warn("[colour]", SWISS_ALTI.note);
+        }
+    })();
+
+    return SWISS_ALTI.promise;
+}
+
+/* ============================================================
    OWN FILE: GeoTIFF, or TIFF + TFW world file
    ============================================================ */
 
@@ -640,9 +973,11 @@ async function prepareOtherSourceRaster() {
     try {
         setStatus(`Loading ${source.label}…`);
 
-        const raster = source.type === "local"
-            ? await prepareLocalRaster()
-            : await prepareWmtsLv95Raster(source);
+        const raster =
+            source.type === "local" ? await prepareLocalRaster() :
+            source.type === "geoadmin" ? await prepareGeoadminRaster() :
+            source.type === "wms" ? await prepareWmsRaster(SWISS_COLOR.wmsUrl, SWISS_COLOR.wmsLayer, SWISS_COLOR.wmsLayer) :
+            await prepareWmtsLv95Raster(source);
 
         const key = tileKey(currentTile, 0);
 
@@ -675,24 +1010,20 @@ async function prepareOtherSourceRaster() {
  * top:    highest point per 1 m cell -> what is visible from above
  */
 const SWISS_GROUND_CELL = 2;
-const SWISS_TOP_CELL = 1;
-const SWISS_OCCLUSION_DEPTH = 2.5;
+const SWISS_TOP_CELL = 0.5;          // fine enough that steep spires are not "walls"
+const SWISS_ROOF_CELL = 1;           // building tops, for the lean estimate
+const SWISS_OCCLUSION_DEPTH = 3;
 
 // ASPRS classes
 const SWISS_CLASS_GROUND = new Uint8Array(256);
 [2, 9, 11].forEach(c => { SWISS_CLASS_GROUND[c] = 1; });
 
 const SWISS_CLASS_OCCLUDABLE = new Uint8Array(256);   // walls of these can be hidden
-[1, 6, 17, 19, 64, 65, 66, 67].forEach(c => { SWISS_CLASS_OCCLUDABLE[c] = 1; });
+[6, 17].forEach(c => { SWISS_CLASS_OCCLUDABLE[c] = 1; });
 
 const SWISS_CLASS_NOISE = new Uint8Array(256);
 [7, 18].forEach(c => { SWISS_CLASS_NOISE[c] = 1; });
 
-const SWISS_CLASS_COLOURS = {
-    1: [200, 200, 200], 3: [150, 200, 110], 4: [95, 165, 75], 5: [45, 125, 50],
-    6: [205, 110, 95], 9: [80, 140, 210], 17: [175, 130, 210]
-};
-const SWISS_GREY = [175, 175, 175];
 const SWISS_WALL = [190, 186, 180];
 const SWISS_NODATA = [150, 150, 150];
 
@@ -715,6 +1046,7 @@ function getSwissGrids(mapper) {
         key,
         ground: Object.assign(make(SWISS_GROUND_CELL), { filled: null, dirty: false, filledAt: 0 }),
         top: make(SWISS_TOP_CELL),
+        roof: make(SWISS_ROOF_CELL),
         hasClasses: false,
         fed: new WeakSet()     // geometries / datasets already added
     };
@@ -737,6 +1069,14 @@ function swissGridsAdd(grids, e, n, z, cls) {
 
     if (t >= 0 && !(grids.top.raw[t] >= z)) {
         grids.top.raw[t] = z;
+    }
+
+    if (cls === 6) {
+        const r = swissGridIndex(grids.roof, e, n);
+
+        if (r >= 0 && !(grids.roof.raw[r] >= z)) {
+            grids.roof.raw[r] = z;
+        }
     }
 
     if (cls >= 0 && SWISS_CLASS_GROUND[cls]) {
@@ -814,6 +1154,20 @@ function swissGroundRefresh(grids, force = false) {
 }
 
 function swissGroundZ(grids, e, n) {
+    // swissALTI3D: the terrain model the orthophotos are rectified on
+    const alti = SWISS_ALTI.data;
+
+    if (alti && SWISS_ALTI.key === grids.key) {
+        const i = Math.floor((e - alti.originE) * alti.invRes);
+        const j = Math.floor((alti.originN - n) * alti.invRes);
+
+        if (i >= 0 && j >= 0 && i < alti.width && j < alti.height) {
+            const z = alti.z[j * alti.width + i];
+            if (z === z) return z;
+        }
+    }
+
+    // fallback: LiDAR ground points
     const ground = grids.ground;
     const k = swissGridIndex(ground, e, n);
 
@@ -855,7 +1209,8 @@ function swissGridsFeedGeometry(grids, geometry, e) {
 
 function swissColorContext(raster, mapper) {
     const grids = getSwissGrids(mapper);
-    const lean = SWISS_COLOR.leanX !== 0 || SWISS_COLOR.leanY !== 0;
+    const field = SWISS_COLOR.leanAuto && raster.leanEstimate?.ok ? raster.leanEstimate : null;
+    const lean = !!field || (!SWISS_COLOR.leanAuto && (SWISS_COLOR.leanX !== 0 || SWISS_COLOR.leanY !== 0));
 
     if (lean) swissGroundRefresh(grids);
 
@@ -866,9 +1221,9 @@ function swissColorContext(raster, mapper) {
         nodata: raster.nodata || null,
         width: raster.width,
         height: raster.height,
-        apply: SWISS_COLOR.apply,
         occlusion: SWISS_COLOR.occlusion,
         lean,
+        field,
         leanX: SWISS_COLOR.leanX,
         leanY: SWISS_COLOR.leanY,
         direct: !!mapper.direct
@@ -907,16 +1262,8 @@ function swissPut(out, o, c) {
  * Returns 1 if the point falls outside the raster.
  */
 function swissColorPoint(ctx, e, n, z, cls, out, o) {
-    const known = cls >= 0;
-
-    // ground-only modes
-    if (known && ctx.apply !== "all" && !SWISS_CLASS_GROUND[cls]) {
-        swissPut(out, o, ctx.apply === "ground-grey" ? SWISS_GREY : (SWISS_CLASS_COLOURS[cls] || SWISS_GREY));
-        return 0;
-    }
-
-    // walls / eaves: not visible from above
-    if (known && ctx.occlusion && SWISS_CLASS_OCCLUDABLE[cls]) {
+    // walls: not visible from above
+    if (cls >= 0 && ctx.occlusion && SWISS_CLASS_OCCLUDABLE[cls]) {
         const t = swissGridIndex(ctx.grids.top, e, n);
 
         if (t >= 0 && ctx.grids.top.raw[t] - z > SWISS_OCCLUSION_DEPTH) {
@@ -930,8 +1277,16 @@ function swissColorPoint(ctx, e, n, z, cls, out, o) {
         const gz = swissGroundZ(ctx.grids, e, n);
 
         if (gz === gz && z > gz) {
-            e += ctx.leanX * (z - gz);
-            n += ctx.leanY * (z - gz);
+            const h = z - gz;
+
+            if (ctx.field) {
+                swissLeanAt(ctx.field, e, n, SWISS_LEAN_TMP);
+                e += SWISS_LEAN_TMP[0] * h;
+                n += SWISS_LEAN_TMP[1] * h;
+            } else {
+                e += ctx.leanX * h;
+                n += ctx.leanY * h;
+            }
         }
     }
 
@@ -982,6 +1337,307 @@ function swissColorPoint(ctx, e, n, z, cls, out, o) {
 }
 
 /* ============================================================
+   AUTOMATIC LEAN ESTIMATE
+   ============================================================ */
+
+/*
+ * Roof edges of the LiDAR (building cells more than 6 m above ground next
+ * to a cell at least 3 m lower) are moved over the image by lean * height.
+ * At the right lean, the image shows a strong brightness step across every
+ * edge (roof inside, ground outside). The lean with the largest mean step
+ * wins - first for the whole tile, then refined per 250 m block, because
+ * the displacement grows with the distance from the camera's flight line.
+ */
+const SWISS_LEAN_BLOCK = 250;
+const SWISS_LEAN_TMP = [0, 0];
+
+/*
+ * Compact luminance copy (at most 25 cm/px, 1 byte per pixel): the search
+ * reads it millions of times at random places, which is far faster in a
+ * small array than in the full RGB raster.
+ */
+function swissImageDescriptor(raster) {
+    if (raster.kind !== "lv95") return null;
+
+    const f = Math.max(1, Math.floor(0.25 / raster.resE));
+    const width = Math.floor(raster.width / f);
+    const height = Math.floor(raster.height / f);
+    const lum = new Uint8Array(width * height);
+    const rgb = raster.rgb;
+    const half = f >> 1;
+
+    for (let j = 0; j < height; j++) {
+        const row = (j * f + half) * raster.width;
+
+        for (let i = 0; i < width; i++) {
+            const p = (row + i * f + half) * 3;
+            lum[j * width + i] = (77 * rgb[p] + 150 * rgb[p + 1] + 29 * rgb[p + 2]) >> 8;
+        }
+    }
+
+    return {
+        lum,
+        width,
+        height,
+        originE: raster.originE,
+        originN: raster.originN,
+        invE: 1 / (raster.resE * f),
+        invN: 1 / (raster.resN * f)
+    };
+}
+
+function swissRoofEdges(grids) {
+    const roof = grids.roof, top = grids.top;
+    const { nx, ny, cell, minE, minN, raw } = roof;
+    const E = [], N = [], DX = [], DY = [], H = [];
+    const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+    for (let j = 1; j < ny - 1; j++) {
+        for (let i = 1; i < nx - 1; i++) {
+            const z = raw[j * nx + i];
+            if (!(z === z)) continue;
+
+            const e = minE + (i + 0.5) * cell;
+            const n = minN + (j + 0.5) * cell;
+            const gz = swissGroundZ(grids, e, n);
+            if (!(z - gz > 6)) continue;
+
+            for (const [di, dj] of dirs) {
+                const zn = raw[(j + dj) * nx + i + di];
+                if (zn === zn && z - zn < 3) continue;          // still roof
+
+                // the neighbour must be known and clearly lower
+                const t = swissGridIndex(top, e + di * cell, n + dj * cell);
+                if (t < 0) continue;
+
+                const zt = top.raw[t];
+                if (!(zt === zt) || z - zt < 3) continue;
+
+                E.push(e); N.push(n); DX.push(di); DY.push(dj); H.push(z - gz);
+            }
+        }
+    }
+
+    return { E, N, DX, DY, H, count: E.length };
+}
+
+/*
+ * Mean brightness step across the given roof edges for one lean.
+ * Inlined pixel lookups: this runs a few million times per estimate.
+ */
+function swissLeanScore(img, edges, idx, lx, ly) {
+    const { lum, width, height, originE, originN, invE, invN } = img;
+    const E = edges.E, N = edges.N, DX = edges.DX, DY = edges.DY, H = edges.H;
+    let sum = 0, used = 0;
+
+    for (let m = 0; m < idx.length; m++) {
+        const k = idx[m];
+        const h = H[k];
+        const e = E[k] + lx * h;
+        const n = N[k] + ly * h;
+
+        const ia = Math.floor((e - 0.25 * DX[k] - originE) * invE);
+        const ja = Math.floor((originN - n + 0.25 * DY[k]) * invN);
+        const ib = Math.floor((e + 0.9 * DX[k] - originE) * invE);
+        const jb = Math.floor((originN - n - 0.9 * DY[k]) * invN);
+
+        if (ia < 0 || ja < 0 || ib < 0 || jb < 0 ||
+            ia >= width || ib >= width || ja >= height || jb >= height) continue;
+
+        const d = lum[ja * width + ia] - lum[jb * width + ib];
+
+        sum += d < 0 ? -d : d;
+        used++;
+    }
+
+    return used ? sum / used : 0;
+}
+
+function swissLeanSearch(img, edges, idx, cx, cy, range, step) {
+    let best = { lx: cx, ly: cy, score: -1 };
+
+    for (let lx = cx - range; lx <= cx + range + 1e-9; lx += step) {
+        for (let ly = cy - range; ly <= cy + range + 1e-9; ly += step) {
+            const score = swissLeanScore(img, edges, idx, lx, ly);
+            if (score > best.score) best = { lx, ly, score };
+        }
+    }
+
+    return best;
+}
+
+/* Coarse-to-fine search: 5 cm, 1 cm, 2.5 mm per metre of height. */
+function swissLeanSearchMulti(img, edges, idx, cx, cy, range) {
+    let best = swissLeanSearch(img, edges, swissSubsample(idx, 1500), cx, cy, range, Math.max(0.02, range / 10));
+    best = swissLeanSearch(img, edges, swissSubsample(idx, 4000), best.lx, best.ly, 0.05, 0.01);
+    best = swissLeanSearch(img, edges, swissSubsample(idx, 8000), best.lx, best.ly, 0.01, 0.0025);
+    return best;
+}
+
+function swissSubsample(indices, max) {
+    if (indices.length <= max) return indices;
+    const step = indices.length / max;
+    return Array.from({ length: max }, (_, i) => indices[Math.floor(i * step)]);
+}
+
+let swissLeanCounter = 0;
+
+function swissEstimateLean(raster, mapper) {
+    const img = swissImageDescriptor(raster);
+    const grids = getSwissGrids(mapper);
+
+    swissGroundRefresh(grids, true);
+
+    const fail = reason => ({ ok: false, id: `none-${++swissLeanCounter}`, reason });
+
+    if (!img) return fail("only possible with LV95 rasters");
+
+    const edges = swissRoofEdges(grids);
+
+    if (edges.count < 80) {
+        return fail(`too few tall roof edges (${edges.count})`);
+    }
+
+    const all = Array.from({ length: edges.count }, (_, i) => i);
+
+    // whole tile: up to 5 m per 10 m of height in any direction
+    const fine = swissLeanSearchMulti(img, edges, all, 0, 0, 0.5);
+    const zero = swissLeanScore(img, edges, swissSubsample(all, 10000), 0, 0);
+
+    // no clear improvement over "no correction": do not guess
+    if (fine.score < zero * 1.03) {
+        return fail("no clear displacement found");
+    }
+
+    // per 250 m block, around the tile value
+    const bx = Math.max(1, Math.ceil((mapper.maxE - mapper.minE) / SWISS_LEAN_BLOCK));
+    const by = Math.max(1, Math.ceil((mapper.maxN - mapper.minN) / SWISS_LEAN_BLOCK));
+    const lx = new Float32Array(bx * by).fill(fine.lx);
+    const ly = new Float32Array(bx * by).fill(fine.ly);
+    const blocks = Array.from({ length: bx * by }, () => []);
+
+    for (let k = 0; k < edges.count; k++) {
+        const i = Math.min(bx - 1, Math.max(0, Math.floor((edges.E[k] - mapper.minE) / SWISS_LEAN_BLOCK)));
+        const j = Math.min(by - 1, Math.max(0, Math.floor((edges.N[k] - mapper.minN) / SWISS_LEAN_BLOCK)));
+        blocks[j * bx + i].push(k);
+    }
+
+    let refined = 0;
+
+    blocks.forEach((idx, b) => {
+        if (idx.length < 150) return;
+
+        const sub = swissSubsample(idx, 3000);
+        const local = swissLeanSearchMulti(img, edges, sub, fine.lx, fine.ly, 0.1);
+        const atTile = swissLeanScore(img, edges, sub, fine.lx, fine.ly);
+
+        if (local.score > atTile * 1.03) {
+            lx[b] = local.lx;
+            ly[b] = local.ly;
+            refined++;
+        }
+    });
+
+    return {
+        ok: true,
+        id: `est-${++swissLeanCounter}`,
+        lx: fine.lx,
+        ly: fine.ly,
+        gain: fine.score / Math.max(1e-9, zero),
+        edges: edges.count,
+        refined,
+        field: { minE: mapper.minE, minN: mapper.minN, size: SWISS_LEAN_BLOCK, nx: bx, ny: by, lx, ly }
+    };
+}
+
+/* Bilinear lean between block centres. */
+function swissLeanAt(estimate, e, n, out) {
+    const f = estimate.field;
+    let u = (e - f.minE) / f.size - 0.5;
+    let v = (n - f.minN) / f.size - 0.5;
+
+    u = u < 0 ? 0 : u > f.nx - 1 ? f.nx - 1 : u;
+    v = v < 0 ? 0 : v > f.ny - 1 ? f.ny - 1 : v;
+
+    const i = Math.min(f.nx - 2, Math.floor(u)), j = Math.min(f.ny - 2, Math.floor(v));
+
+    if (f.nx < 2 || f.ny < 2) {
+        const k = Math.round(v) * f.nx + Math.round(u);
+        out[0] = f.lx[k]; out[1] = f.ly[k];
+        return out;
+    }
+
+    const fu = u - i, fv = v - j;
+    const k = j * f.nx + i;
+    const w00 = (1 - fu) * (1 - fv), w10 = fu * (1 - fv), w01 = (1 - fu) * fv, w11 = fu * fv;
+
+    out[0] = f.lx[k] * w00 + f.lx[k + 1] * w10 + f.lx[k + f.nx] * w01 + f.lx[k + f.nx + 1] * w11;
+    out[1] = f.ly[k] * w00 + f.ly[k + 1] * w10 + f.ly[k + f.nx] * w01 + f.ly[k + f.nx + 1] * w11;
+    return out;
+}
+
+/* Run the estimate for the current raster (COPC: after the grids were fed). */
+function swissUpdateLeanEstimate(raster, mapper) {
+    if (!SWISS_COLOR.leanAuto) return;
+
+    const t0 = performance.now();
+    raster.leanEstimate = swissEstimateLean(raster, mapper);
+    const ms = Math.round(performance.now() - t0);
+    const est = raster.leanEstimate;
+
+    const text = est.ok
+        ? `Tower lean estimated from ${est.edges.toLocaleString()} roof edges: ` +
+          `${(est.lx * 10).toFixed(2)} m east, ${(est.ly * 10).toFixed(2)} m north per 10 m of height` +
+          (est.refined ? ` (refined in ${est.refined} block(s))` : "") +
+          (SWISS_ALTI.note ? `; terrain: ${SWISS_ALTI.note}` : "") + ` [${ms} ms]`
+        : `Tower lean not estimated: ${est.reason}.`;
+
+    console.info("[colour]", text);
+    window.dispatchEvent(new CustomEvent("swiss-lean-estimate", { detail: { estimate: est, text } }));
+}
+
+/* ============================================================
+   GROUND-ONLY FILTER (hide all other classes)
+   ============================================================ */
+
+function swissApplyGroundFilter() {
+    const only = SWISS_COLOR.groundOnly;
+
+    // Potree: classification visibility (works in every colour mode)
+    try {
+        const scheme = viewer?.classifications;
+
+        if (scheme) {
+            for (const key of Object.keys(scheme)) {
+                const code = Number(key);
+                const visible = !only || (Number.isInteger(code) && SWISS_CLASS_GROUND[code] === 1);
+
+                if (typeof viewer.setClassificationVisibility === "function") {
+                    viewer.setClassificationVisibility(key, visible);
+                } else if (scheme[key]) {
+                    scheme[key].visible = visible;
+                }
+            }
+
+            for (const pointcloud of viewer.scene?.pointclouds || []) {
+                const material = pointcloud.material;
+                if (!material) continue;
+                material.classification = scheme;
+                material.recomputeClassification?.();
+                material.needsUpdate = true;
+            }
+        }
+    } catch (error) {
+        console.warn("[colour] ground filter (Potree) failed:", error);
+    }
+
+    // plain LAZ clouds (laz.js)
+    if (currentPointCloud?.isLaz) {
+        currentPointCloud.lazSetGroundOnly?.(only);
+    }
+}
+
+/* ============================================================
    SETTINGS CHANGES (called by ui.js)
    ============================================================ */
 
@@ -1013,8 +1669,9 @@ window.swissColor = {
     sources: SWISS_SOURCES,
     settings: SWISS_COLOR,
     local: SWISS_LOCAL,
+    groundClasses: SWISS_CLASS_GROUND,
 
-    /* point rules changed (apply, occlusion, lean) */
+    /* occlusion or lean changed */
     rulesChanged() {
         swissRecolour(false);
     },
@@ -1024,7 +1681,23 @@ window.swissColor = {
         swissRecolour(true);
     },
 
+    /* estimate the tower lean again (e.g. after more detail has loaded) */
+    estimateLean() {
+        const raster = SWISSIMAGE_RGB.raster;
+        if (!raster) return;
+
+        raster.leanEstimate = null;
+        raster.leanPending = true;
+        swissRecolour(false);
+    },
+
+    groundOnlyChanged() {
+        swissApplyGroundFilter();
+    },
+
     setLocalFiles: swissSetLocalFiles,
+    searchLayers: swissSearchLayers,
+    terrainNote: () => SWISS_ALTI.note,
 
     async times(sourceName) {
         const source = SWISS_SOURCES[sourceName];

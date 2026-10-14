@@ -175,6 +175,9 @@
         }
     }
 
+    // used by render.js to restore everything after rendering
+    window.reapplyViewerSettings = () => applyViewerSettings();
+
     function applyViewerSettings() {
         if (!viewer) {
             return;

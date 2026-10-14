@@ -447,7 +447,41 @@
             shade.push(Math.max(0, Math.min(1, (pz - base) / Math.max(0.5, top - base))));
         });
 
-        return { positions, shade, faces: f };
+        return { positions, shade, faces: f, centre: [cx, cy, cz] };
+    }
+
+    /*
+     * Stem: tapered 8-sided body from the stem foot into the middle of the
+     * crown (it disappears inside the soft crown volume). Thickness grows
+     * with tree height and crown size. Relative to the stem foot, Z up.
+     */
+    function stemGeometry(tree) {
+        const blob = tree.blob || (tree.blob = crownBlob(tree));
+        const [cx, cy, cz] = blob.centre;
+        const r0 = Math.min(0.45, Math.max(0.06, 0.012 * tree.height + 0.01 * tree.crownDiameter));
+        const r1 = r0 * 0.45;
+        const sides = 8;
+        const positions = [], shade = [], faces = [];
+
+        // foot below the stem point, top at the crown centre (slight lean allowed)
+        const rings = [[0, 0, -0.2, r0], [cx * 0.5, cy * 0.5, tree.crownBase, r0 * 0.75], [cx, cy, cz, r1]];
+
+        rings.forEach(([x, y, z, r], ringIndex) => {
+            for (let s = 0; s < sides; s++) {
+                const a = (s / sides) * Math.PI * 2;
+                positions.push(x + r * Math.cos(a), y + r * Math.sin(a), z);
+                shade.push(ringIndex / (rings.length - 1));
+            }
+        });
+
+        for (let ring = 0; ring < rings.length - 1; ring++) {
+            for (let s = 0; s < sides; s++) {
+                const a = ring * sides + s, b = ring * sides + (s + 1) % sides;
+                faces.push([a, b, b + sides], [a, b + sides, a + sides]);
+            }
+        }
+
+        return { positions, shade, faces };
     }
 
     /* ============================================================
@@ -516,15 +550,41 @@
         const [ox, oy] = worldOffset(result.extent);
         group.position.set(origin[0] + ox, origin[1] + oy, origin[2]);
 
-        // stems
-        const stem = [];
-        for (const t of trees) {
-            const x = t.e - origin[0], y = t.n - origin[1], z = t.groundZ - origin[2];
-            stem.push(x, y, z, x, y, z + t.crownBase);
+        // stems: tapered bodies, shaded like the crowns
+        {
+            const positions = [], shade = [], index = [];
+
+            for (const t of trees) {
+                const stem = stemGeometry(t);
+                const offset = positions.length / 3;
+                const x0 = t.e - origin[0], y0 = t.n - origin[1], z0 = t.groundZ - origin[2];
+
+                for (let p = 0; p < stem.positions.length; p += 3) {
+                    positions.push(stem.positions[p] + x0, stem.positions[p + 1] + y0, stem.positions[p + 2] + z0);
+                }
+                shade.push(...stem.shade);
+                for (const [a, b, c] of stem.faces) index.push(a + offset, b + offset, c + offset);
+            }
+
+            const g = new THREE.BufferGeometry();
+            setAttr(g, "position", new THREE.Float32BufferAttribute(positions, 3));
+            setAttr(g, "aShade", new THREE.Float32BufferAttribute(shade, 1));
+            g.setIndex(index);
+            g.computeVertexNormals();
+
+            const mesh = new THREE.Mesh(g, new THREE.ShaderMaterial({
+                uniforms: {
+                    uOpacity: { value: 1 },
+                    uLow: { value: new THREE.Color(0x4a3a2c) },
+                    uHigh: { value: new THREE.Color(0x8a7560) }
+                },
+                vertexShader: BLOB_VERTEX,
+                fragmentShader: BLOB_FRAGMENT,
+                transparent: false
+            }));
+            mesh.name = "swiss-tree-stems";
+            group.add(mesh);
         }
-        const stemGeometry = new THREE.BufferGeometry();
-        setAttr(stemGeometry, "position", new THREE.Float32BufferAttribute(stem, 3));
-        group.add(new THREE.LineSegments(stemGeometry, new THREE.LineBasicMaterial({ color: 0x6b4a2b })));
 
         if (style === "circle") {
             const ring = [];
@@ -645,19 +705,13 @@
             for (const [a, b, c] of blob.faces) lines.push(`f ${a + base} ${b + base} ${c + base}`);
             base += blob.positions.length / 3;
 
-            // stem: hexagonal prism up to the crown base
-            const r = Math.max(0.12, 0.012 * t.height);
-            for (const z of [z0, z0 + t.crownBase]) {
-                for (let s = 0; s < 6; s++) {
-                    const a = (s / 6) * Math.PI * 2;
-                    lines.push(`v ${fix(x0 + r * Math.cos(a))} ${fix(y0 + r * Math.sin(a))} ${fix(z)}`);
-                }
+            // stem: same tapered body as in the viewer
+            const stem = stemGeometry(t);
+            for (let p = 0; p < stem.positions.length; p += 3) {
+                lines.push(`v ${fix(stem.positions[p] + x0)} ${fix(stem.positions[p + 1] + y0)} ${fix(stem.positions[p + 2] + z0)}`);
             }
-            for (let s = 0; s < 6; s++) {
-                const a = base + s, b = base + (s + 1) % 6;
-                lines.push(`f ${a} ${b} ${b + 6} ${a + 6}`);
-            }
-            base += 12;
+            for (const [a, b, c] of stem.faces) lines.push(`f ${a + base} ${b + base} ${c + base}`);
+            base += stem.positions.length / 3;
         }
 
         download(`${baseName()}_origin_${origin.join("_")}.obj`, lines.join("\n"), "text/plain");
@@ -800,5 +854,5 @@
     });
 
     // for tests / other modules
-    window.swissTrees = { detectTrees, crownBlob };
+    window.swissTrees = { detectTrees, crownBlob, stemGeometry };
 })();

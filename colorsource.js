@@ -1048,7 +1048,8 @@ function getSwissGrids(mapper) {
         top: make(SWISS_TOP_CELL),
         roof: make(SWISS_ROOF_CELL),
         hasClasses: false,
-        fed: new WeakSet()     // geometries / datasets already added
+        fed: new WeakSet(),    // geometries / datasets already added
+        pointCount: 0          // points added so far (COPC: grows while zooming in)
     };
 
     return swissGrids;
@@ -1181,6 +1182,7 @@ function swissGroundZ(grids, e, n) {
 function swissGridsFeedGeometry(grids, geometry, e) {
     if (grids.fed.has(geometry)) return;
     grids.fed.add(geometry);
+    grids.pointCount += geometry.attributes.position.count;
 
     const position = geometry.attributes.position;
     const cls = geometry.attributes.classification?.array || null;
@@ -1478,9 +1480,38 @@ function swissNearestStrip(strips, e, n, out) {
     return best;
 }
 
-/* Lean (metres of shift per metre of height) at a position. */
+/*
+ * Lean (metres of shift per metre of height) at a position. The strip comes
+ * from the mosaic seams fitted against the image (see swissFitSeams); only
+ * where no seam could be fitted, the closest flight line is assumed.
+ */
 function swissLeanAt(estimate, e, n, out) {
-    const st = swissNearestStrip(estimate.strips, e, n, SWISS_STRIP_D);
+    let st = null;
+    const assign = estimate.assign;
+
+    // the fitted mosaic seams
+    if (estimate.seams) {
+        st = swissStripFromSeams(estimate.seams, estimate.strips, e, n);
+        if (st) SWISS_STRIP_D[0] = (e - st.cx) * st.vx + (n - st.cy) * st.vy;
+    }
+
+    if (!st && assign) {
+        const i = Math.floor((e - assign.minE) / assign.size);
+        const j = Math.floor((n - assign.minN) / assign.size);
+
+        if (i >= 0 && j >= 0 && i < assign.nx && j < assign.ny) {
+            const choice = assign.cells[j * assign.nx + i];
+
+            if (choice === SWISS_ASSIGN_NONE) { out[0] = 0; out[1] = 0; return out; }
+
+            if (choice >= 0) {
+                st = estimate.strips[choice];
+                SWISS_STRIP_D[0] = (e - st.cx) * st.vx + (n - st.cy) * st.vy;
+            }
+        }
+    }
+
+    if (!st) st = swissNearestStrip(estimate.strips, e, n, SWISS_STRIP_D);
 
     if (!st) { out[0] = 0; out[1] = 0; return out; }
 
@@ -1687,37 +1718,342 @@ function swissEstimateLean(raster, mapper) {
         return fail("the image shows no clear displacement");
     }
 
+    // Which strip did the mosaic use where? Decide per area from the image,
+    // then refit k with those choices, and decide once more.
+    let k = best.k;
+    let seams = swissFitSeams(img, edges, strips, k);
+    let assign = null;
+
+    if (seams) {
+        assign = swissSeamsAsCells(seams, strips, mapper);
+        const refit = swissFitKAssigned(img, edges, strips, assign, k);
+
+        if (refit) {
+            k = refit;
+            seams = swissFitSeams(img, edges, strips, k);
+            assign = null;
+        }
+    }
+
     return {
         ok: true,
         model: "strips",
         id: `strips-${++swissLeanCounter}`,
-        k: best.k,
-        a: best.a,
-        flyingHeight: 1 / best.k,
+        k,
+        a: 0,
+        flyingHeight: 1 / k,
         strips,
+        seams,
+        assign,
         edges: keep.length,
         gain: best.score / Math.max(1e-9, zero)
     };
 }
 
+/* ---------- mosaic seams between neighbouring strips ---------- */
+
+/*
+ * Between two parallel strips the mosaic switches from one to the other
+ * along a seam line. Its across-track position is fitted per 250 m along
+ * the flight direction, using all roof edges in the overlap at once.
+ */
+const SWISS_SEAM_BIN = 250;
+const SWISS_SEAM_STEP = 10;
+
+function swissFitSeams(img, edges, strips, k) {
+    if (strips.length < 2) return null;
+
+    // common axes: all strips must be (nearly) parallel
+    const ref = strips[0];
+    for (const st of strips) {
+        if (Math.abs(st.ux * ref.ux + st.uy * ref.uy) < 0.95) return null;
+    }
+
+    const ux = ref.ux, uy = ref.uy, vx = ref.vx, vy = ref.vy;
+    const across = st => st.cx * vx + st.cy * vy;
+    const order = strips.map((st, i) => i).sort((a, b) => across(strips[a]) - across(strips[b]));
+
+    // along-track bins over the edges
+    let aMin = Infinity, aMax = -Infinity;
+    for (let q = 0; q < edges.count; q++) {
+        const a = edges.E[q] * ux + edges.N[q] * uy;
+        if (a < aMin) aMin = a;
+        if (a > aMax) aMax = a;
+    }
+    if (!(aMax > aMin)) return null;
+
+    const nbins = Math.max(1, Math.ceil((aMax - aMin + 1) / SWISS_SEAM_BIN));
+    const pairs = [];
+
+    for (let p = 0; p + 1 < order.length; p++) {
+        const A = strips[order[p]], Bs = strips[order[p + 1]];
+        const pA = across(A), pB = across(Bs);
+        const lo = pB - Bs.halfWidth, hi = pA + A.halfWidth;    // overlap zone
+        const mid = (pA + pB) / 2;
+
+        if (!(hi > lo)) { pairs.push({ A: order[p], B: order[p + 1], seams: new Float64Array(nbins).fill(mid) }); continue; }
+
+        const seamsOfPair = new Float64Array(nbins).fill(NaN);
+
+        for (let b = 0; b < nbins; b++) {
+            // edges of this bin inside the overlap, facing across
+            const idx = [];
+            for (let q = 0; q < edges.count; q++) {
+                const a = edges.E[q] * ux + edges.N[q] * uy;
+                if (Math.floor((a - aMin) / SWISS_SEAM_BIN) !== b) continue;
+                const c = edges.E[q] * vx + edges.N[q] * vy;
+                if (c < lo || c > hi) continue;
+                if (Math.abs(edges.DX[q] * vx + edges.DY[q] * vy) < 0.5) continue;
+                idx.push(q);
+            }
+            if (idx.length < 30) continue;
+
+            const across0 = q => edges.E[q] * vx + edges.N[q] * vy;
+            let best = { s: mid, score: -1 };
+
+            for (let sPos = lo; sPos <= hi + 1e-9; sPos += SWISS_SEAM_STEP) {
+                const left = [], right = [];
+                for (const q of idx) (across0(q) < sPos ? left : right).push(q);
+
+                // score each part as seen from its own strip, weighted by size
+                const sl = left.length ? swissStripScore(img, edges, left, A, k, A) : 0;
+                const sr = right.length ? swissStripScore(img, edges, right, Bs, k, Bs) : 0;
+                const score = (sl * left.length + sr * right.length) / idx.length;
+
+                if (score > best.score) best = { s: sPos, score };
+            }
+
+            seamsOfPair[b] = best.s;
+        }
+
+        // bins without enough roofs: neighbouring bin, else the midpoint
+        for (let b = 0; b < nbins; b++) {
+            if (seamsOfPair[b] === seamsOfPair[b]) continue;
+            let v = NaN;
+            for (let r = 1; r < nbins && v !== v; r++) {
+                if (b - r >= 0 && seamsOfPair[b - r] === seamsOfPair[b - r]) v = seamsOfPair[b - r];
+                else if (b + r < nbins && seamsOfPair[b + r] === seamsOfPair[b + r]) v = seamsOfPair[b + r];
+            }
+            seamsOfPair[b] = v === v ? v : mid;
+        }
+
+        pairs.push({ A: order[p], B: order[p + 1], seams: seamsOfPair });
+    }
+
+    return { ux, uy, vx, vy, aMin, bin: SWISS_SEAM_BIN, nbins, order, pairs };
+}
+
+/* The strip the mosaic shows at (e, n), from the fitted seams. */
+function swissStripFromSeams(seams, strips, e, n) {
+    const a = e * seams.ux + n * seams.uy;
+    const c = e * seams.vx + n * seams.vy;
+    let b = Math.floor((a - seams.aMin) / seams.bin);
+    b = b < 0 ? 0 : b >= seams.nbins ? seams.nbins - 1 : b;
+
+    // walk across the strips: left of the first seam -> first strip, ...
+    let index = seams.order[0];
+    for (const pair of seams.pairs) {
+        if (c >= pair.seams[b]) index = pair.B; else break;
+    }
+
+    const st = strips[index];
+    return swissStripCovers(st, e, n) ? st : null;
+}
+
+/* Seams as a 40 m cell map (used for the refit of k). */
+function swissSeamsAsCells(seams, strips, mapper) {
+    const size = SWISS_ASSIGN_CELL;
+    const nx = Math.max(1, Math.ceil((mapper.maxE - mapper.minE) / size));
+    const ny = Math.max(1, Math.ceil((mapper.maxN - mapper.minN) / size));
+    const cells = new Int8Array(nx * ny).fill(SWISS_ASSIGN_UNKNOWN);
+
+    for (let j = 0; j < ny; j++) {
+        for (let i = 0; i < nx; i++) {
+            const st = swissStripFromSeams(seams, strips,
+                mapper.minE + (i + 0.5) * size, mapper.minN + (j + 0.5) * size);
+            if (st) cells[j * nx + i] = strips.indexOf(st);
+        }
+    }
+
+    return { minE: mapper.minE, minN: mapper.minN, size, nx, ny, cells, decided: nx * ny };
+}
+
+/* ---------- which strip the mosaic used, per 40 m area ---------- */
+
+const SWISS_ASSIGN_CELL = 40;
+const SWISS_ASSIGN_NONE = -1;      // image fits best without correction
+const SWISS_ASSIGN_UNKNOWN = -2;   // no roofs here: closest flight line
+
+/*
+ * Edge step for the given edges, displaced as if seen from strip `st`
+ * (st = null: no displacement). Like the main fit: only edges facing
+ * across the flight line `ref`, the two sides weighted equally.
+ */
+function swissStripScore(img, edges, idx, st, k, ref) {
+    const { lum, width, height, originE, originN, invE, invN } = img;
+    const B = SWISS_ROOF_CELL / 2;
+    const sum = [0, 0], used = [0, 0];
+
+    for (const q of idx) {
+        const e0 = edges.E[q], n0 = edges.N[q];
+        const dx = edges.DX[q], dy = edges.DY[q];
+
+        const dRef = (e0 - ref.cx) * ref.vx + (n0 - ref.cy) * ref.vy;
+        const c = (dx * ref.vx + dy * ref.vy) * (dRef < 0 ? -1 : 1);
+        if (Math.abs(c) < 0.5) continue;
+
+        let e = e0, n = n0;
+
+        if (st) {
+            const d = (e0 - st.cx) * st.vx + (n0 - st.cy) * st.vy;
+            e += k * d * st.vx * edges.H[q];
+            n += k * d * st.vy * edges.H[q];
+        }
+
+        const bx = e + B * dx, by = n + B * dy;
+        const ia = Math.floor((bx - 0.5 * dx - originE) * invE);
+        const ja = Math.floor((originN - by + 0.5 * dy) * invN);
+        const ib = Math.floor((bx + 0.5 * dx - originE) * invE);
+        const jb = Math.floor((originN - by - 0.5 * dy) * invN);
+
+        if (ia < 0 || ja < 0 || ib < 0 || jb < 0 ||
+            ia >= width || ib >= width || ja >= height || jb >= height) continue;
+
+        const v = lum[ja * width + ia] - lum[jb * width + ib];
+        const side = c > 0 ? 0 : 1;
+        sum[side] += v < 0 ? -v : v;
+        used[side]++;
+    }
+
+    let total = 0, sides = 0;
+    for (let side = 0; side < 2; side++) {
+        if (used[side] >= 4) { total += sum[side] / used[side]; sides++; }
+    }
+
+    return sides ? total / sides : 0;
+}
+
+function swissStripCovers(st, e, n) {
+    const s = (e - st.cx) * st.ux + (n - st.cy) * st.uy;
+    const d = (e - st.cx) * st.vx + (n - st.cy) * st.vy;
+    return s >= st.sMin - 50 && s <= st.sMax + 50 && Math.abs(d) <= st.halfWidth * 1.05;
+}
+
+/* Refit k with every edge displaced as seen from its area's strip. */
+function swissFitKAssigned(img, edges, strips, assign, k0) {
+    const AX = new Float32Array(edges.count), AY = new Float32Array(edges.count);
+    const idx = [];
+
+    for (let q = 0; q < edges.count; q++) {
+        const i = Math.floor((edges.E[q] - assign.minE) / assign.size);
+        const j = Math.floor((edges.N[q] - assign.minN) / assign.size);
+        if (i < 0 || j < 0 || i >= assign.nx || j >= assign.ny) continue;
+
+        const s = assign.cells[j * assign.nx + i];
+        if (s < 0) continue;
+
+        const st = strips[s];
+        const d = (edges.E[q] - st.cx) * st.vx + (edges.N[q] - st.cy) * st.vy;
+        const c = edges.DX[q] * st.vx + edges.DY[q] * st.vy;
+        if (Math.abs(c) < 0.5) continue;              // only edges facing across
+
+        AX[q] = d * st.vx;
+        AY[q] = d * st.vy;
+        idx.push(q);
+    }
+
+    if (idx.length < 80) return null;
+
+    const view = { ...edges, AX, AY, DIR: new Uint8Array(edges.count) };
+    for (const q of idx) {
+        const s = assign.cells[Math.floor((edges.N[q] - assign.minN) / assign.size) * assign.nx +
+                               Math.floor((edges.E[q] - assign.minE) / assign.size)];
+        const st = strips[s];
+        const d = (edges.E[q] - st.cx) * st.vx + (edges.N[q] - st.cy) * st.vy;
+        view.DIR[q] = (edges.DX[q] * st.vx + edges.DY[q] * st.vy) * (d < 0 ? -1 : 1) > 0 ? 0 : 1;
+    }
+
+    const sub = swissSubsample(idx, 10000);
+    let best = { k: k0, score: -1 };
+
+    for (let k = Math.max(0.0001, k0 * 0.7); k <= k0 * 1.3; k += k0 * 0.005) {
+        const score = swissModelScore(img, view, sub, k, 0);
+        if (score > best.score) best = { k, score };
+    }
+
+    return best.k;
+}
+
 /* Run the estimate for the current raster (COPC: after the grids were fed). */
-function swissUpdateLeanEstimate(raster, mapper) {
+/*
+ * Run the estimate for the current raster. With again = true (COPC, more
+ * detail has loaded since the last run) the new result only replaces the
+ * old one - and triggers recolouring - if it really differs.
+ */
+function swissUpdateLeanEstimate(raster, mapper, again = false) {
     if (!SWISS_COLOR.leanAuto) return;
 
+    const grids = getSwissGrids(mapper);
     const t0 = performance.now();
-    raster.leanEstimate = swissEstimateLean(raster, mapper);
+    const est = swissEstimateLean(raster, mapper);
     const ms = Math.round(performance.now() - t0);
-    const est = raster.leanEstimate;
+    const previous = raster.leanEstimate;
+
+    raster.leanPoints = grids.pointCount;
+    raster.leanRuns = (raster.leanRuns || 0) + 1;
+
+    if (again && previous) {
+        const changed =
+            previous.ok !== est.ok ||
+            (est.ok && Math.abs(est.k - previous.k) / previous.k > 0.02);
+
+        if (!changed) {
+            console.info(`[colour] lean re-checked with more detail: unchanged [${ms} ms]`);
+            return;
+        }
+
+        // a failed re-check never replaces a working estimate
+        if (previous.ok && !est.ok) return;
+    }
+
+    raster.leanEstimate = est;
 
     const text = est.ok
         ? `Tower lean: ${est.strips.length} flight strip(s) of ${raster.year}, ` +
           `flying height ≈ ${Math.round(est.flyingHeight).toLocaleString()} m above ground ` +
-          `(fitted on ${est.edges.toLocaleString()} roof edges)` +
+          `(fitted on ${est.edges.toLocaleString()} roof edges` +
+          (again ? ", refined after more detail loaded" : "") + ")" +
           (SWISS_ALTI.note ? `; terrain: ${SWISS_ALTI.note}` : "") + ` [${ms} ms]`
         : `Tower lean not corrected: ${est.reason}.`;
 
     console.info("[colour]", text);
     window.dispatchEvent(new CustomEvent("swiss-lean-estimate", { detail: { estimate: est, text } }));
+
+    // new estimate: every node gets recoloured (its colour key changed)
+    if (again) {
+        swissRecolour(false);
+    }
+}
+
+/*
+ * COPC: re-run the estimate whenever the loaded detail has doubled since
+ * the last run (at most 4 times per image, checked every 2 s).
+ */
+const SWISS_LEAN_MAX_RUNS = 5;
+
+function swissMaybeReestimate(raster, mapper) {
+    if (!SWISS_COLOR.leanAuto || !raster.leanEstimate) return;
+
+    const now = performance.now();
+    if (now - (raster.leanCheckedAt || 0) < 2000) return;
+    raster.leanCheckedAt = now;
+
+    if ((raster.leanRuns || 0) >= SWISS_LEAN_MAX_RUNS) return;
+
+    const grids = getSwissGrids(mapper);
+    if (grids.pointCount < 2 * (raster.leanPoints || Infinity)) return;
+
+    swissUpdateLeanEstimate(raster, mapper, true);
 }
 
 /* ============================================================
@@ -1811,7 +2147,7 @@ window.swissColor = {
         if (!raster) return;
 
         raster.leanEstimate = null;
-        raster.leanPending = true;
+        raster.leanRuns = 0;
         swissRecolour(false);
     },
 

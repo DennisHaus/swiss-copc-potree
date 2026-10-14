@@ -10,7 +10,12 @@
  *   2. tree tops: local maxima of the (lightly smoothed) CHM, searched in a
  *      window that grows with the tree height (Popescu & Wynne 2004)
  *   3. crowns: region growing from the tops, highest cells first
- *   4. per tree: position (LV95), height, crown base, crown diameter/area
+ *   4. per tree: position (LV95), height, crown base, crown diameter/area,
+ *      estimated leaf type (needle / broadleaf, experimental): swissSURFACE3D
+ *      is mostly flown leafless, so lasers pass through bare broadleaf crowns
+ *      to the ground but hardly through evergreen conifers; conifers are
+ *      also conical (crown edge low relative to the tip), broadleaf crowns
+ *      dome-shaped
  *   5. crown volume: a soft "blob" - an icosphere pushed out to the crown
  *      points in every direction, smoothed, drawn translucent with fading
  *      edges: an approximation that still reads as an abstraction of the
@@ -70,7 +75,8 @@
         // crown point samples: reservoir of SAMPLE_CAP points per 1 m cell
         const sx = Math.ceil((extent.maxE - extent.minE) / SAMPLE_CELL);
         const sy = Math.ceil((extent.maxN - extent.minN) / SAMPLE_CELL);
-        const seen = new Uint16Array(sx * sy);
+        const seen = new Uint16Array(sx * sy);          // vegetation points per 1 m cell
+        const groundSeen = new Uint16Array(sx * sy);    // ground points per 1 m cell
         const slot = new Int32Array(sx * sy * SAMPLE_CAP).fill(-1);
         let cap = 1 << 20, used = 0;
         let PE = new Float32Array(cap), PN = new Float32Array(cap), PZ = new Float32Array(cap);
@@ -92,6 +98,8 @@
                     const k = j * g.nx + i;
                     if (!(g.raw[k] <= z)) { g.raw[k] = z; g.dirty = true; }
                 }
+                const si = Math.floor(le / SAMPLE_CELL), sj = Math.floor(ln / SAMPLE_CELL);
+                if (si < sx && sj < sy && groundSeen[sj * sx + si] < 65535) groundSeen[sj * sx + si]++;
                 return;
             }
 
@@ -262,7 +270,8 @@
 
             return {
                 id: idx + 1, e, n: nn, groundZ: groundOf(e, nn),
-                height: 0, cells: 0, sumE: 0, sumN: 0, points: []
+                height: 0, cells: 0, sumE: 0, sumN: 0, points: [],
+                sampleCells: new Set(), cellList: []
             };
         });
 
@@ -274,6 +283,8 @@
             if (chm[k] > t.height) t.height = chm[k];
             const i = k % nx, j = (k - i) / nx;
             t.sumE += i; t.sumN += j;
+            t.cellList.push(k);
+            t.sampleCells.add(Math.floor(j * CHM_CELL / SAMPLE_CELL) * sx + Math.floor(i * CHM_CELL / SAMPLE_CELL));
         }
 
         // crown point samples
@@ -307,8 +318,41 @@
                 ? heights[Math.floor(heights.length * 0.05)]
                 : Math.max(1, t.height * 0.4);
 
+            // leaf type: crown shape + laser penetration to the ground
+            const R = Math.sqrt(area / Math.PI);
+            const ti = Math.round((t.e - extent.minE) / CHM_CELL - 0.5), tj = Math.round((t.n - extent.minN) / CHM_CELL - 0.5);
+            let edgeSum = 0, edgeCount = 0;
+            const inner = new Set();
+
+            for (const k of t.cellList) {
+                const i = k % nx, j = (k - i) / nx;
+                const r = Math.hypot(i - ti, j - tj) * CHM_CELL / Math.max(0.5, R);
+                if (r >= 0.55 && r <= 0.9) { edgeSum += chm[k]; edgeCount++; }
+                // penetration only inside the crown (edge cells also see ground beside the tree)
+                if (r < 0.6) inner.add(Math.floor(j * CHM_CELL / SAMPLE_CELL) * sx + Math.floor(i * CHM_CELL / SAMPLE_CELL));
+            }
+
+            let veg = 0, grd = 0;
+            for (const c of inner) { veg += seen[c]; grd += groundSeen[c]; }
+            const penetration = veg + grd > 0 ? grd / (veg + grd) : 0;
+            const edge = edgeCount >= 3 ? edgeSum / edgeCount / t.height : NaN;
+
+            // shape decides; penetration confirms (or decides when the shape is in between)
+            let leafType = "unknown";
+            if (t.height >= 5 && edge === edge) {
+                if (edge < 0.68 && penetration < 0.3) leafType = "needle";
+                else if (edge > 0.76 && penetration > 0.15) leafType = "broadleaf";
+                else if (edge >= 0.68 && edge <= 0.76) {
+                    if (penetration < 0.1) leafType = "needle";
+                    else if (penetration > 0.3) leafType = "broadleaf";
+                }
+            }
+
             result.push({
                 id: result.length + 1,
+                leafType,
+                penetration,
+                edgeRatio: edge,
                 e: t.e,
                 n: t.n,
                 groundZ: t.groundZ,
@@ -490,12 +534,15 @@
 
     const BLOB_VERTEX = `
         attribute float aShade;
+        attribute float aType;      // 0 broadleaf, 0.5 unknown, 1 needle
         varying vec3 vNormal;
         varying vec3 vView;
         varying float vShade;
+        varying float vType;
         varying vec3 vLight;
 
         void main() {
+            vType = aType;
             vec4 mv = modelViewMatrix * vec4(position, 1.0);
             vNormal = normalize(normalMatrix * normal);
             vView = normalize(-mv.xyz);
@@ -509,9 +556,11 @@
         uniform float uOpacity;
         uniform vec3 uLow;
         uniform vec3 uHigh;
+        uniform float uByType;      // 1: colour by leaf type
         varying vec3 vNormal;
         varying vec3 vView;
         varying float vShade;
+        varying float vType;
         varying vec3 vLight;
 
         void main() {
@@ -520,7 +569,15 @@
             float facing = abs(dot(n, normalize(vView)));
             float soft = smoothstep(0.0, 0.85, facing);
             float light = 0.55 + 0.45 * max(dot(n, vLight), 0.0);
-            vec3 colour = mix(uLow, uHigh, vShade) * light;
+            vec3 low = uLow, high = uHigh;
+            if (uByType > 0.5) {
+                // broadleaf: fresh yellow-green, needle: deep blue-green
+                vec3 bLow = vec3(0.25, 0.42, 0.16), bHigh = vec3(0.73, 0.83, 0.47);
+                vec3 nLow = vec3(0.10, 0.27, 0.22), nHigh = vec3(0.34, 0.55, 0.47);
+                low = vType < 0.25 ? bLow : (vType > 0.75 ? nLow : uLow);
+                high = vType < 0.25 ? bHigh : (vType > 0.75 ? nHigh : uHigh);
+            }
+            vec3 colour = mix(low, high, vShade) * light;
             gl_FragColor = vec4(colour, uOpacity * (0.12 + 0.88 * soft));
         }
     `;
@@ -569,11 +626,13 @@
             const g = new THREE.BufferGeometry();
             setAttr(g, "position", new THREE.Float32BufferAttribute(positions, 3));
             setAttr(g, "aShade", new THREE.Float32BufferAttribute(shade, 1));
+            setAttr(g, "aType", new THREE.Float32BufferAttribute(new Float32Array(shade.length).fill(0.5), 1));
             g.setIndex(index);
             g.computeVertexNormals();
 
             const mesh = new THREE.Mesh(g, new THREE.ShaderMaterial({
                 uniforms: {
+                    uByType: { value: 0 },
                     uOpacity: { value: 1 },
                     uLow: { value: new THREE.Color(0x4a3a2c) },
                     uHigh: { value: new THREE.Color(0x8a7560) }
@@ -603,10 +662,12 @@
         }
 
         if (style === "blob") {
-            const positions = [], shade = [], index = [];
+            const positions = [], shade = [], index = [], type = [];
+            const typeValue = { broadleaf: 0, unknown: 0.5, needle: 1 };
 
             for (const t of trees) {
                 const blob = t.blob || (t.blob = crownBlob(t));
+                for (let q = 0; q < blob.shade.length; q++) type.push(typeValue[t.leafType] ?? 0.5);
                 const offset = positions.length / 3;
                 const x0 = t.e - origin[0], y0 = t.n - origin[1], z0 = t.groundZ - origin[2];
 
@@ -620,11 +681,13 @@
             const g = new THREE.BufferGeometry();
             setAttr(g, "position", new THREE.Float32BufferAttribute(positions, 3));
             setAttr(g, "aShade", new THREE.Float32BufferAttribute(shade, 1));
+            setAttr(g, "aType", new THREE.Float32BufferAttribute(type, 1));
             g.setIndex(index);
             g.computeVertexNormals();
 
             const material = new THREE.ShaderMaterial({
                 uniforms: {
+                    uByType: { value: el("trees-bytype")?.checked !== false ? 1 : 0 },
                     uOpacity: { value: opacity },
                     uLow: { value: new THREE.Color(0x2f5d34) },
                     uHigh: { value: new THREE.Color(0x9cc58a) }
@@ -697,7 +760,7 @@
             const blob = t.blob || (t.blob = crownBlob(t));
             const x0 = t.e - origin[0], y0 = t.n - origin[1], z0 = t.groundZ - origin[2];
 
-            lines.push(`o tree_${String(t.id).padStart(4, "0")}_h${t.height.toFixed(1)}m`);
+            lines.push(`o tree_${String(t.id).padStart(4, "0")}_${t.leafType}_h${t.height.toFixed(1)}m`);
 
             for (let p = 0; p < blob.positions.length; p += 3) {
                 lines.push(`v ${fix(blob.positions[p] + x0)} ${fix(blob.positions[p + 1] + y0)} ${fix(blob.positions[p + 2] + z0)}`);
@@ -718,10 +781,11 @@
     }
 
     function exportCsv() {
-        const rows = ["id;E_LV95;N_LV95;ground_z;height_m;crown_base_m;crown_diameter_m;crown_area_m2"];
+        const rows = ["id;E_LV95;N_LV95;ground_z;height_m;crown_base_m;crown_diameter_m;crown_area_m2;leaf_type_estimated;laser_penetration"];
         for (const t of state.result.trees) {
             rows.push([t.id, t.e.toFixed(2), t.n.toFixed(2), t.groundZ.toFixed(2), t.height.toFixed(2),
-                t.crownBase.toFixed(2), t.crownDiameter.toFixed(2), t.crownArea.toFixed(1)].join(";"));
+                t.crownBase.toFixed(2), t.crownDiameter.toFixed(2), t.crownArea.toFixed(1),
+                t.leafType, t.penetration.toFixed(2)].join(";"));
         }
         download(`${baseName()}.csv`, rows.join("\n"), "text/csv");
     }
@@ -735,7 +799,9 @@
                 height_m: +t.height.toFixed(2),
                 crown_base_m: +t.crownBase.toFixed(2),
                 crown_diameter_m: +t.crownDiameter.toFixed(2),
-                crown_area_m2: +t.crownArea.toFixed(1)
+                crown_area_m2: +t.crownArea.toFixed(1),
+                leaf_type_estimated: t.leafType,
+                laser_penetration: +t.penetration.toFixed(2)
             }
         }));
 
@@ -811,8 +877,10 @@
 
             const s = Math.round((performance.now() - t0) / 1000);
             const tall = out.trees.filter(t => t.height >= 15).length;
+            const byType = type => out.trees.filter(t => t.leafType === type).length.toLocaleString();
             setInfo(
-                `${out.trees.length.toLocaleString()} trees found (${tall.toLocaleString()} taller than 15 m), ` +
+                `${out.trees.length.toLocaleString()} trees found (${tall.toLocaleString()} taller than 15 m; ` +
+                `estimated ${byType("broadleaf")} broadleaf, ${byType("needle")} needle, ${byType("unknown")} unclear), ` +
                 `from ${out.vegetation.toLocaleString()} vegetation points [${s} s]. ` +
                 (SWISS_ALTI.data ? `Terrain: ${SWISS_ALTI.note}.` : "Terrain: LiDAR ground points.")
             );
@@ -829,6 +897,7 @@
     document.addEventListener("DOMContentLoaded", () => {
         el("trees-detect")?.addEventListener("click", run);
         el("trees-style")?.addEventListener("change", show);
+        el("trees-bytype")?.addEventListener("change", show);
         el("trees-opacity")?.addEventListener("input", () => {
             const mesh = state.group?.getObjectByName("swiss-tree-crowns");
             if (mesh) mesh.material.uniforms.uOpacity.value = Number(el("trees-opacity").value);

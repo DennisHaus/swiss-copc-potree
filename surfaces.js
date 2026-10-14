@@ -5,11 +5,12 @@
  *
  *   terrain  swissALTI3D (the bare ground: streets, squares, meadows, also
  *            under trees and cars); LiDAR ground points where it is missing
- *   roofs    building points (class 6) and bridges (17): highest point per
- *            cell, small holes filled, isolated noise removed, triangulated
- *   walls    vertical faces along every roof outline down to the terrain
- *            (LiDAR barely sees facades and the orthophoto never does, so
- *            they get a neutral colour)
+ *   buildings  swissBUILDINGS3D (swisstopo's 3D Tiles, see buildings3d.js):
+ *            clean roof planes and walls; or, as fallback / on request,
+ *            from the LiDAR building points (class 6) and bridges (17):
+ *            highest point per cell, holes filled, noise removed, with
+ *            vertical walls along every roof outline
+ *   walls    neutral colour (the orthophoto never shows facades)
  *
  * Vegetation, cars, poles etc. are left out - trees come from trees.js as
  * soft crown volumes.
@@ -30,7 +31,7 @@
     GROUND[2] = 1;
     GROUND[9] = 1;
 
-    const state = { surface: null, group: null, texture: null, busy: false, hidden: [] };
+    const state = { surface: null, group: null, texture: null, busy: false, hidden: [], look: null };
 
     /* ============================================================
        GRIDS (pure computation)
@@ -261,6 +262,28 @@
         };
     }
 
+    /* swissBUILDINGS3D triangles (LV95) -> flat-shaded mesh relative to origin */
+    function buildingMesh(triangles, origin) {
+        const n = triangles.length;
+        const positions = new Float32Array(n), normals = new Float32Array(n);
+
+        for (let i = 0; i < n; i += 9) {
+            for (let k = 0; k < 9; k += 3) {
+                positions[i + k] = triangles[i + k] - origin[0];
+                positions[i + k + 1] = triangles[i + k + 1] - origin[1];
+                positions[i + k + 2] = triangles[i + k + 2] - origin[2];
+            }
+            const ax = positions[i + 3] - positions[i], ay = positions[i + 4] - positions[i + 1], az = positions[i + 5] - positions[i + 2];
+            const bx = positions[i + 6] - positions[i], by = positions[i + 7] - positions[i + 1], bz = positions[i + 8] - positions[i + 2];
+            let nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+            const len = Math.hypot(nx, ny, nz) || 1;
+            nx /= len; ny /= len; nz /= len;
+            for (let k = 0; k < 9; k += 3) { normals[i + k] = nx; normals[i + k + 1] = ny; normals[i + k + 2] = nz; }
+        }
+
+        return { positions, normals };
+    }
+
     /* ============================================================
        TEXTURE from the current raster
        ============================================================ */
@@ -314,9 +337,11 @@
         varying vec2 vUv;
         varying vec3 vNormal;
         varying vec3 vLight;
+        varying float vUp;
 
         void main() {
             vUv = vec2((position.x + uMap.x) * uMap.z, (uMap.y - position.y) * uMap.w);
+            vUp = normal.z;
             vNormal = normalize(normalMatrix * normal);
             vLight = normalize((viewMatrix * vec4(0.35, -0.25, 1.0, 0.0)).xyz);
             gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
@@ -327,13 +352,17 @@
         uniform sampler2D uTex;
         uniform float uUseTex;
         uniform vec3 uColor;
+        uniform vec3 uRoofColor;
+        uniform float uSplit;       // 1: faces pointing up are roofs, the rest walls
         varying vec2 vUv;
         varying vec3 vNormal;
         varying vec3 vLight;
+        varying float vUp;
 
         void main() {
-            vec3 base = uColor;
-            if (uUseTex > 0.5 && vUv.x >= 0.0 && vUv.x <= 1.0 && vUv.y >= 0.0 && vUv.y <= 1.0) {
+            bool roof = uSplit < 0.5 || abs(vUp) > 0.3;
+            vec3 base = uSplit > 0.5 && roof ? uRoofColor : uColor;
+            if (roof && uUseTex > 0.5 && vUv.x >= 0.0 && vUv.x <= 1.0 && vUv.y >= 0.0 && vUv.y <= 1.0) {
                 base = texture2D(uTex, vUv).rgb;
             }
             float light = 0.62 + 0.38 * max(dot(normalize(vNormal), vLight), 0.0);
@@ -362,12 +391,14 @@
         ortho: { terrain: 0xb8b8b0, roof: 0xa8a49c, wall: 0xd9d3c9 }
     };
 
-    function material(colour, crop, useTex, origin) {
+    function material(colour, crop, useTex, origin, roofColour = null) {
         return new THREE.ShaderMaterial({
             uniforms: {
                 uTex: { value: state.texture },
                 uUseTex: { value: useTex && state.texture ? 1 : 0 },
                 uColor: { value: new THREE.Color(colour) },
+                uRoofColor: { value: new THREE.Color(roofColour ?? colour) },
+                uSplit: { value: roofColour === null ? 0 : 1 },
                 uMap: {
                     value: crop
                         ? new THREE.Vector4(origin[0] - crop.left, crop.top - origin[1], 1 / crop.widthM, 1 / crop.heightM)
@@ -391,7 +422,7 @@
         if (!state.surface || !viewer?.scene?.scene) return;
 
         const S = state.surface;
-        const style = el("surf-style")?.value || "ortho";
+        const style = state.look || el("surf-style")?.value || "white";
         const colours = COLOURS[style === "white" ? "white" : "ortho"];
         const useTex = style !== "white";
 
@@ -411,8 +442,18 @@
         };
 
         addMesh(S.meshes.terrain, colours.terrain, useTex);
-        addMesh(S.meshes.roof, colours.roof, useTex);
-        addMesh(S.meshes.walls, colours.wall, false, S.meshes.walls.normals);
+
+        if (S.meshes.buildings) {
+            // swissBUILDINGS3D: flat faces, roofs vs walls by slope
+            const B = S.meshes.buildings;
+            const g = new THREE.BufferGeometry();
+            setAttr(g, "position", new THREE.BufferAttribute(B.positions, 3));
+            setAttr(g, "normal", new THREE.BufferAttribute(B.normals, 3));
+            group.add(new THREE.Mesh(g, material(colours.wall, S.crop, useTex, S.origin, colours.roof)));
+        } else {
+            addMesh(S.meshes.roof, colours.roof, useTex);
+            addMesh(S.meshes.walls, colours.wall, false, S.meshes.walls.normals);
+        }
 
         state.group = group;
         viewer.scene.scene.add(group);
@@ -466,7 +507,7 @@
         if (!S) return;
 
         const name = `surfaces_${(typeof swissKmTileId === "function" && swissKmTileId(currentTile)) || "tile"}`;
-        const textured = !!S.crop && (el("surf-style")?.value || "ortho") !== "white";
+        const textured = !!S.crop && (el("surf-style")?.value || "white") !== "white";
         const out = [
             "# Surfaces from swissSURFACE3D + swissALTI3D (Swiss LiDAR Viewer)",
             `# Local coordinates. LV95 = local + (${S.origin.join(", ")})`,
@@ -499,8 +540,23 @@
 
         setStatus("Writing OBJ…");
         write("terrain", S.meshes.terrain, textured ? "ortho" : "terrain", textured);
-        write("roofs", S.meshes.roof, textured ? "ortho" : "roof", textured);
-        write("walls", S.meshes.walls, "wall", false);
+
+        if (S.meshes.buildings) {
+            // split swissBUILDINGS3D faces into roofs (pointing up) and walls
+            const B = S.meshes.buildings.positions, Nn = S.meshes.buildings.normals;
+            const roofs = [], walls = [];
+            for (let i = 0; i < B.length; i += 9) (Math.abs(Nn[i + 2]) > 0.3 ? roofs : walls).push(i);
+            const asMesh = list => {
+                const positions = new Float32Array(list.length * 9);
+                list.forEach((i, t) => positions.set(B.subarray(i, i + 9), t * 9));
+                return { positions, index: Uint32Array.from({ length: list.length * 3 }, (_, k) => k) };
+            };
+            write("roofs", asMesh(roofs), textured ? "ortho" : "roof", textured);
+            write("walls", asMesh(walls), "wall", false);
+        } else {
+            write("roofs", S.meshes.roof, textured ? "ortho" : "roof", textured);
+            write("walls", S.meshes.walls, "wall", false);
+        }
 
         const mtl = [
             "newmtl terrain", "Kd 0.91 0.90 0.87",
@@ -569,20 +625,43 @@
             const extent = swissTileExtentLV95(0);
             const area = modelArea(extent, cell);
 
-            setInfo("Reading building points…");
+            const terrainAt = (e, n) => {
+                const alti = SWISS_ALTI.data;
+                if (!alti || SWISS_ALTI.key !== key) return NaN;
+                const i = Math.floor((e - alti.originE) * alti.invRes);
+                const j = Math.floor((alti.originN - n) * alti.invRes);
+                return i >= 0 && j >= 0 && i < alti.width && j < alti.height ? alti.z[j * alti.width + i] : NaN;
+            };
+
+            const wantSb3d = (el("surf-buildings")?.value || "sb3d") === "sb3d";
+            const haveAlti = !!SWISS_ALTI.data && SWISS_ALTI.key === key;
+
+            // swissBUILDINGS3D first; LiDAR points are only read when needed
+            let sb3d = null, sb3dNote = "";
+            if (wantSb3d) {
+                try {
+                    sb3d = await window.swissBuildings3D.loadBuildings({
+                        area, terrainAt,
+                        onProgress: text => setInfo(text)
+                    });
+                    if (!sb3d.triangles.length) { sb3dNote = "no swissBUILDINGS3D buildings here"; sb3d = null; }
+                } catch (error) {
+                    console.warn("[surfaces] swissBUILDINGS3D:", error);
+                    sb3dNote = `swissBUILDINGS3D unavailable (${error.message}) – buildings from LiDAR`;
+                }
+            }
+
+            const readPoints = !sb3d || !haveAlti;
+            if (readPoints) setInfo(sb3d ? "Reading ground points (no swissALTI3D)…" : "Reading building points…");
+
             const S = await buildSurface({
-                forEachPoint: window.swissTilePoints.forEach,
-                area, cell, key,
-                terrainAt: (e, n) => {
-                    const alti = SWISS_ALTI.data;
-                    if (!alti || SWISS_ALTI.key !== key) return NaN;
-                    const i = Math.floor((e - alti.originE) * alti.invRes);
-                    const j = Math.floor((alti.originN - n) * alti.invRes);
-                    return i >= 0 && j >= 0 && i < alti.width && j < alti.height ? alti.z[j * alti.width + i] : NaN;
-                },
+                forEachPoint: readPoints ? window.swissTilePoints.forEach : async () => 0,
+                area, cell, key, terrainAt,
                 onProgress: (done, total) => showSwissImageProgress(done, total, "Reading points…")
             });
             hideSwissImageProgress();
+            S.sb3d = sb3d;
+            S.sb3dNote = sb3dNote;
 
             const origin = [
                 Math.round((area.minE + area.maxE) / 2 / 100) * 100,
@@ -590,8 +669,12 @@
                 Math.round(S.terrain[Math.floor(S.terrain.length / 2)] / 10) * 10
             ];
 
-            const roofWalls = roofAndWallMeshes(S, origin);
-            S.meshes = { terrain: terrainMesh(S, origin), roof: roofWalls.roof, walls: roofWalls.walls };
+            if (S.sb3d) {
+                S.meshes = { terrain: terrainMesh(S, origin), buildings: buildingMesh(S.sb3d.triangles, origin) };
+            } else {
+                const roofWalls = roofAndWallMeshes(S, origin);
+                S.meshes = { terrain: terrainMesh(S, origin), roof: roofWalls.roof, walls: roofWalls.walls };
+            }
             S.origin = origin;
             S.extent = extent;
             S.tileKey = key;
@@ -601,10 +684,13 @@
             state.surface = S;
             show();
 
-            const triangles = (S.meshes.terrain.index.length + S.meshes.roof.index.length + S.meshes.walls.index.length) / 3;
+            const buildingTriangles = S.meshes.buildings
+                ? S.meshes.buildings.positions.length / 9
+                : (S.meshes.roof.index.length + S.meshes.walls.index.length) / 3;
             setInfo(
-                `${Math.round((area.maxE - area.minE))} × ${Math.round(area.maxN - area.minN)} m at ${cell} m: ` +
-                `${Math.round(triangles).toLocaleString()} triangles` +
+                `${Math.round((area.maxE - area.minE))} × ${Math.round(area.maxN - area.minN)} m, terrain ${cell} m; ` +
+                `buildings: ${S.sb3d ? "swissBUILDINGS3D" : "from LiDAR"} (${Math.round(buildingTriangles).toLocaleString()} triangles)` +
+                (S.sb3dNote ? ` – ${S.sb3dNote}` : "") +
                 (S.crop ? `, texture ${S.crop.width} × ${S.crop.height} px` : ", no raster texture (colour the tile with an LV95 raster first)") +
                 ` [${Math.round((performance.now() - t0) / 1000)} s].`
             );
@@ -643,5 +729,17 @@
         }, 1000);
     });
 
-    window.swissSurfaces = { buildSurface, terrainMesh, roofAndWallMeshes, cleanRoofs };
+    /* used by render.js for the style series */
+    const view = {
+        has: () => !!state.surface,
+        look: () => state.look || el("surf-style")?.value || "white",
+        setLook(look) { state.look = look; show(); },
+        resetLook() { state.look = null; show(); },
+        setVisible(visible) { if (state.group) state.group.visible = visible; },
+        visible: () => !!state.group?.visible,
+        setPointsHidden(hidden) { setPointsHidden(false); if (hidden && state.group) setPointsHidden(true); },
+        pointsHidden: () => state.hidden.length > 0
+    };
+
+    window.swissSurfaces = { buildSurface, terrainMesh, roofAndWallMeshes, cleanRoofs, view };
 })();

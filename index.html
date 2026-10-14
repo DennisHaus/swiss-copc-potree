@@ -299,6 +299,58 @@
         </details>
 
         <details class="fold" open>
+            <summary>Surfaces</summary>
+            <div class="fold-body">
+                <div class="ctrl">
+                    <label for="surf-detail" class="control-label">Detail</label>
+                    <select id="surf-detail">
+                        <option value="1" selected>1 m – whole tile</option>
+                        <option value="0.5">0.5 m – 600 m around the view centre</option>
+                    </select>
+                    <label for="surf-style" class="control-label">Look</label>
+                    <select id="surf-style">
+                        <option value="ortho" selected>Raster texture (orthophoto, map …)</option>
+                        <option value="white">White massing model</option>
+                    </select>
+                    <label><input id="surf-hide-points" type="checkbox" checked> Hide points</label>
+                    <button id="surf-build" type="button">Build surfaces</button>
+                    <button id="surf-clear" type="button">Remove</button>
+                    <div id="surf-info" class="section-info">
+                        Terrain from swissALTI3D, roofs from the building points, vertical walls along
+                        the roof outlines. Vegetation, cars and poles are left out (trees: see above).
+                    </div>
+                    <button id="surf-obj" type="button" disabled>Rhino (OBJ + texture)</button>
+                </div>
+            </div>
+        </details>
+
+        <details class="fold" open>
+            <summary>Render image</summary>
+            <div class="fold-body">
+                <div class="ctrl">
+                    <label for="render-width" class="control-label">Width</label>
+                    <select id="render-width">
+                        <option value="2000">2000 px</option>
+                        <option value="4000" selected>4000 px</option>
+                        <option value="8000">8000 px</option>
+                    </select>
+                    <label for="render-style" class="control-label">Style</label>
+                    <select id="render-style">
+                        <option value="dense" selected>Closed surfaces</option>
+                        <option value="white">Closed surfaces, white background</option>
+                        <option value="shown">As shown</option>
+                    </select>
+                    <label><input id="render-trees" type="checkbox" checked> Include tree crowns</label>
+                    <button id="render-button" type="button">Render current view (PNG)</button>
+                    <div class="section-info">
+                        Renders exactly the current camera view at high resolution. More detail is
+                        loaded first, which can take a moment. Esc cancels.
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <details class="fold" open>
             <summary>Appearance</summary>
             <div class="fold-body">
 
@@ -501,6 +553,8 @@
 <script src="./ui.js"></script>
 <script src="./export.js"></script>
 <script src="./trees.js"></script>
+<script src="./surfaces.js"></script>
+<script src="./render.js"></script>
 <script src="./counter.js"></script>
 
 </body>

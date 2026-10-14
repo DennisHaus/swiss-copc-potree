@@ -37,8 +37,9 @@
         colorSource: "swissimage",
         colorTimes: {},          // chosen year per map source
         groundOnly: false,       // filter: ground / water points only
-        occlusion: true,
-        leanAuto: true,
+        occlusion: false,        // off: every point takes the pixel under it (like FME)
+        leanAuto: false,         // off: no building-lean correction (like FME)
+        settingsVersion: 2,
         leanX: 0,                // metres of shift per 10 m of height
         leanY: 0,
         layerId: "",             // geo.admin.ch layer (natural hazards, ...)
@@ -52,7 +53,19 @@
     function loadSettings() {
         try {
             const raw = localStorage.getItem(STORAGE_KEY);
-            return { ...DEFAULTS, ...(raw ? JSON.parse(raw) : {}) };
+            const stored = raw ? JSON.parse(raw) : {};
+
+            // version 2: plain orthophoto colours by default (no lean correction,
+            // no neutral walls) - also for settings saved by earlier versions
+            if ((stored.settingsVersion || 1) < 2) {
+                stored.leanAuto = false;
+                stored.occlusion = false;
+                stored.leanX = 0;
+                stored.leanY = 0;
+                stored.settingsVersion = 2;
+            }
+
+            return { ...DEFAULTS, ...stored };
         } catch (error) {
             return { ...DEFAULTS };
         }
@@ -269,8 +282,8 @@
         c.groundOnly = settings.groundOnly;
         c.occlusion = settings.occlusion;
         c.leanAuto = settings.leanAuto;
-        c.leanX = settings.leanX / 10;
-        c.leanY = settings.leanY / 10;
+        c.leanX = 0;    // manual lean removed: correction is either automatic or off
+        c.leanY = 0;
         c.layerId = settings.layerId;
         c.layerLabel = settings.layerLabel;
         c.wmsUrl = settings.wmsUrl;
@@ -341,7 +354,6 @@
         if (el("ground-only")) el("ground-only").checked = settings.groundOnly;
         if (el("color-occlusion")) el("color-occlusion").checked = settings.occlusion;
         if (el("lean-auto")) el("lean-auto").checked = settings.leanAuto;
-        if (el("lean-manual")) el("lean-manual").hidden = settings.leanAuto;
         if (el("lean-estimate")) el("lean-estimate").hidden = !settings.leanAuto;
         if (el("color-local-row")) el("color-local-row").hidden = settings.colorSource !== "local";
         if (el("color-geoadmin-row")) el("color-geoadmin-row").hidden = settings.colorSource !== "geoadmin";

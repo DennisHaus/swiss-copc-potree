@@ -2058,6 +2058,9 @@ function swissImageFrame() {
     // tower lean from the roof edges (once per raster, or on request)
     if (SWISS_COLOR.leanAuto && !raster.leanEstimate) {
         swissUpdateLeanEstimate(raster, mapper);
+    } else {
+        // more detail loaded since (zooming in): refine automatically
+        swissMaybeReestimate(raster, mapper);
     }
 
     const start = performance.now();
@@ -2560,8 +2563,10 @@ async function prepareSwissImageRaster() {
         throw new Error("Selected tile has no bbox.");
     }
 
-    // terrain for "height above ground" (lean, walls): swissALTI3D
-    await swissEnsureAlti();
+    // terrain for "height above ground": only needed by the optional corrections
+    if (SWISS_COLOR.leanAuto || SWISS_COLOR.occlusion) {
+        await swissEnsureAlti();
+    }
 
     // other colour sources (maps, 1946, own file): see colorsource.js
     if (swissSource().type !== "dop10") {
@@ -2575,8 +2580,8 @@ async function prepareSwissImageRaster() {
             raster.sourceKey = swissSourceKey();
             raster.label = `SWISSIMAGE ${raster.year}`;
 
-            // flight strips of that year: geometry for the tower-lean correction
-            try {
+            // flight strips of that year: only for the optional lean correction
+            if (SWISS_COLOR.leanAuto) try {
                 raster.strips = await swissLoadStrips(raster.year, swissTileExtentLV95(0));
                 if (!raster.strips.length) {
                     raster.stripNote = `no SWISSIMAGE flight strips of ${raster.year} found`;

@@ -261,20 +261,9 @@
                 </div>
 
                 <div class="ctrl swiss-lean">
-                    <label><input id="lean-auto" type="checkbox"> Correct building lean from the SWISSIMAGE flight strips</label>
+                    <label><input id="lean-auto" type="checkbox"> Correct building lean (experimental: improves some buildings, can make others worse)</label>
                     <button id="lean-estimate" type="button">Estimate again</button>
                     <div id="lean-info" class="section-info"></div>
-                    <div id="lean-manual">
-                    <label for="swiss-lean-x">Tower lean east–west <output id="swiss-lean-x-out"></output></label>
-                    <input id="swiss-lean-x" type="range" min="-5" max="5" step="0.05">
-                    <label for="swiss-lean-y">Tower lean north–south <output id="swiss-lean-y-out"></output></label>
-                    <input id="swiss-lean-y" type="range" min="-5" max="5" step="0.05">
-                    <div class="section-info">
-                        Manual fallback: one lean for the whole tile. If a tower's colour sits east
-                        of the tower, move east–west to the right (value = metres per 10 m of height).
-                        Double-click a slider to reset it.
-                    </div>
-                    </div>
                 </div>
             </div>
         </details>

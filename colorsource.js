@@ -106,8 +106,8 @@ const SWISS_COLOR = {
     source: "swissimage",
     time: "",            // WMTS time ("" = layer default)
     groundOnly: false,   // filter: show ground / water points only
-    occlusion: true,
-    leanAuto: true,      // estimate the tower lean from the data
+    occlusion: false,    // default: every point takes the pixel under it (like FME)
+    leanAuto: false,     // default: no lean correction (like FME)
     leanX: 0,            // manual lean: metres of image shift per metre of height
     leanY: 0,
     layerId: "",         // geoadmin: layer id, e.g. ch.bafu.landesforstinventar-schutzwaldregionen
@@ -2131,8 +2131,24 @@ window.swissColor = {
     local: SWISS_LOCAL,
     groundClasses: SWISS_CLASS_GROUND,
 
-    /* occlusion or lean changed */
-    rulesChanged() {
+    /* occlusion or lean changed: load what they need first */
+    async rulesChanged() {
+        if (SWISS_COLOR.leanAuto || SWISS_COLOR.occlusion) {
+            await swissEnsureAlti();
+        }
+
+        const raster = SWISSIMAGE_RGB.raster;
+
+        if (SWISS_COLOR.leanAuto && raster && raster.strips === undefined && Number.isFinite(raster.year)) {
+            try {
+                raster.strips = await swissLoadStrips(raster.year, swissTileExtentLV95(0));
+                if (!raster.strips.length) raster.stripNote = `no SWISSIMAGE flight strips of ${raster.year} found`;
+            } catch (error) {
+                raster.strips = [];
+                raster.stripNote = `flight strips unavailable (${error.message})`;
+            }
+        }
+
         swissRecolour(false);
     },
 

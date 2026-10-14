@@ -2571,8 +2571,21 @@ async function prepareSwissImageRaster() {
 
     try {
         if (await prepareSwissImageRasterDop10()) {
-            SWISSIMAGE_RGB.raster.sourceKey = swissSourceKey();
-            SWISSIMAGE_RGB.raster.label = `SWISSIMAGE ${SWISSIMAGE_RGB.raster.year}`;
+            const raster = SWISSIMAGE_RGB.raster;
+            raster.sourceKey = swissSourceKey();
+            raster.label = `SWISSIMAGE ${raster.year}`;
+
+            // flight strips of that year: geometry for the tower-lean correction
+            try {
+                raster.strips = await swissLoadStrips(raster.year, swissTileExtentLV95(0));
+                if (!raster.strips.length) {
+                    raster.stripNote = `no SWISSIMAGE flight strips of ${raster.year} found`;
+                }
+            } catch (error) {
+                raster.strips = [];
+                raster.stripNote = `flight strips unavailable (${error.message})`;
+            }
+
             return;
         }
     } catch (error) {

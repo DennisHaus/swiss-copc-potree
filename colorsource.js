@@ -1011,7 +1011,7 @@ async function prepareOtherSourceRaster() {
  */
 const SWISS_GROUND_CELL = 2;
 const SWISS_TOP_CELL = 0.5;          // fine enough that steep spires are not "walls"
-const SWISS_ROOF_CELL = 1;           // building tops, for the lean estimate
+const SWISS_ROOF_CELL = 0.5;         // building tops, for the lean estimate
 const SWISS_OCCLUSION_DEPTH = 3;
 
 // ASPRS classes
@@ -1337,24 +1337,168 @@ function swissColorPoint(ctx, e, n, z, cls, out, o) {
 }
 
 /* ============================================================
-   AUTOMATIC LEAN ESTIMATE
+   TOWER LEAN FROM THE FLIGHT STRIPS (physical model)
    ============================================================ */
 
 /*
- * Roof edges of the LiDAR (building cells more than 6 m above ground next
- * to a cell at least 3 m lower) are moved over the image by lean * height.
- * At the right lean, the image shows a strong brightness step across every
- * edge (roof inside, ground outside). The lean with the largest mean step
- * wins - first for the whole tile, then refined per 250 m block, because
- * the displacement grows with the distance from the camera's flight line.
+ * SWISSIMAGE is made from ADS line-scanner strips. A point h metres above
+ * the terrain is drawn displaced PERPENDICULAR to the flight line, by
+ *
+ *     h * d / H        d = distance from the flight line, H = flying height
+ *
+ * (e.g. 13 m building, 250 m beside the line, H = 1250 m  ->  2.6 m).
+ * The strips (position, footprint, year, purpose) are published by
+ * swisstopo (layer ch.swisstopo.lubis-bildstreifen), so the direction and
+ * the growth with distance are known. Only k = 1 / H is unknown; it is
+ * fitted by moving the LiDAR roof outlines over the image. Shadows cannot
+ * fake this: they would need to grow linearly with distance from the line.
  */
-const SWISS_LEAN_BLOCK = 250;
 const SWISS_LEAN_TMP = [0, 0];
+const SWISS_STRIP_LAYER = "ch.swisstopo.lubis-bildstreifen";
+
+function swissPolygonRings(geometry) {
+    if (!geometry) return [];
+    if (geometry.type === "Polygon") return [geometry.coordinates[0]];
+    if (geometry.type === "MultiPolygon") return geometry.coordinates.map(p => p[0]);
+    if (Array.isArray(geometry.rings)) return [geometry.rings[0]];          // esri JSON
+    return [];
+}
+
+/* Footprint -> flight line (centre, along/across axes, extent). */
+function swissStripModel(ring, props) {
+    const pts = ring.filter(p => Number.isFinite(p[0]) && Number.isFinite(p[1]));
+    if (pts.length < 3) return null;
+
+    let cx = 0, cy = 0;
+    for (const [x, y] of pts) { cx += x; cy += y; }
+    cx /= pts.length; cy /= pts.length;
+
+    // principal axis of the footprint = flight direction
+    let sxx = 0, syy = 0, sxy = 0;
+    for (const [x, y] of pts) {
+        const dx = x - cx, dy = y - cy;
+        sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+    }
+    const angle = 0.5 * Math.atan2(2 * sxy, sxx - syy);
+    let ux = Math.cos(angle), uy = Math.sin(angle);
+
+    // orient along the flight direction if the start point is known
+    const sx = Number(props.toposhop_start_x), sy = Number(props.toposhop_start_y);
+    const directed = Number.isFinite(sx) && Number.isFinite(sy) && sx > 0 && sy > 0;
+    if (directed && (cx - sx) * ux + (cy - sy) * uy < 0) { ux = -ux; uy = -uy; }
+
+    const vx = -uy, vy = ux;   // across-track
+    let sMin = Infinity, sMax = -Infinity, dMax = 0;
+
+    for (const [x, y] of pts) {
+        const s = (x - cx) * ux + (y - cy) * uy;
+        const d = Math.abs((x - cx) * vx + (y - cy) * vy);
+        if (s < sMin) sMin = s;
+        if (s > sMax) sMax = s;
+        if (d > dMax) dMax = d;
+    }
+
+    return {
+        id: String(props.id || ""),
+        date: String(props.flugdatum || ""),
+        cx, cy, ux, uy, vx, vy, sMin, sMax,
+        halfWidth: dMax,
+        directed
+    };
+}
+
+/* Flight strips of one year that were flown for SWISSIMAGE, over the tile. */
+async function swissLoadStrips(year, extent) {
+    if (!Number.isFinite(year)) return [];
+
+    const box = [extent.minE, extent.minN, extent.maxE, extent.maxN].join(",");
+
+    const query = async withTime => {
+        const url = new URL("https://api3.geo.admin.ch/rest/services/api/MapServer/identify");
+        const params = {
+            geometry: box,
+            geometryType: "esriGeometryEnvelope",
+            layers: `all:${SWISS_STRIP_LAYER}`,
+            mapExtent: box,
+            imageDisplay: "500,500,96",
+            tolerance: "0",
+            sr: "2056",
+            returnGeometry: "true",
+            geometryFormat: "geojson",
+            limit: "200"
+        };
+        if (withTime) params.timeInstant = String(year);
+        for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`flight strips request failed (${response.status})`);
+        return (await response.json()).results || [];
+    };
+
+    let results = await query(true);
+    if (!results.length) results = await query(false);
+
+    const strips = [];
+
+    for (const feature of results) {
+        const props = feature.properties || feature.attributes || {};
+        const flown = Number(props.bgdi_flugjahr) || Number(String(props.flugdatum || "").slice(0, 4));
+
+        if (flown !== year) continue;
+        if (props.goal && !/swissimage/i.test(String(props.goal))) continue;
+
+        for (const ring of swissPolygonRings(feature.geometry)) {
+            const strip = swissStripModel(ring, props);
+            if (strip) strips.push(strip);
+        }
+    }
+
+    return strips;
+}
 
 /*
- * Compact luminance copy (at most 25 cm/px, 1 byte per pixel): the search
- * reads it millions of times at random places, which is far faster in a
- * small array than in the full RGB raster.
+ * The strip whose flight line is closest (the mosaic uses the most
+ * vertical view). Returns the across-track distance via out.
+ */
+function swissNearestStrip(strips, e, n, out) {
+    let best = null, bestAbs = Infinity;
+
+    for (const st of strips) {
+        const dx = e - st.cx, dy = n - st.cy;
+        const s = dx * st.ux + dy * st.uy;
+        if (s < st.sMin - 50 || s > st.sMax + 50) continue;
+
+        const d = dx * st.vx + dy * st.vy;
+        const abs = d < 0 ? -d : d;
+        if (abs > st.halfWidth * 1.05) continue;
+
+        if (abs < bestAbs) { bestAbs = abs; best = st; out[0] = d; }
+    }
+
+    return best;
+}
+
+/* Lean (metres of shift per metre of height) at a position. */
+function swissLeanAt(estimate, e, n, out) {
+    const st = swissNearestStrip(estimate.strips, e, n, SWISS_STRIP_D);
+
+    if (!st) { out[0] = 0; out[1] = 0; return out; }
+
+    const across = estimate.k * SWISS_STRIP_D[0];
+    const along = st.directed ? estimate.a : 0;
+
+    out[0] = across * st.vx + along * st.ux;
+    out[1] = across * st.vy + along * st.uy;
+    return out;
+}
+
+const SWISS_STRIP_D = [0];
+
+/* ---------- fitting k (and a) against the image ---------- */
+
+/*
+ * Compact luminance copy (at most 25 cm/px, 1 byte per pixel): the fit
+ * reads it millions of times at random places.
  */
 function swissImageDescriptor(raster) {
     if (raster.kind !== "lv95") return null;
@@ -1368,7 +1512,6 @@ function swissImageDescriptor(raster) {
 
     for (let j = 0; j < height; j++) {
         const row = (j * f + half) * raster.width;
-
         for (let i = 0; i < width; i++) {
             const p = (row + i * f + half) * 3;
             lum[j * width + i] = (77 * rgb[p] + 150 * rgb[p + 1] + 29 * rgb[p + 2]) >> 8;
@@ -1376,9 +1519,7 @@ function swissImageDescriptor(raster) {
     }
 
     return {
-        lum,
-        width,
-        height,
+        lum, width, height,
         originE: raster.originE,
         originN: raster.originN,
         invE: 1 / (raster.resE * f),
@@ -1386,10 +1527,11 @@ function swissImageDescriptor(raster) {
     };
 }
 
+/* Roof edges: building cells > 6 m above terrain next to a clearly lower cell. */
 function swissRoofEdges(grids) {
     const roof = grids.roof, top = grids.top;
     const { nx, ny, cell, minE, minN, raw } = roof;
-    const E = [], N = [], DX = [], DY = [], H = [];
+    const E = [], N = [], DX = [], DY = [], H = [], DIR = [];
     const dirs = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 
     for (let j = 1; j < ny - 1; j++) {
@@ -1406,72 +1548,63 @@ function swissRoofEdges(grids) {
                 const zn = raw[(j + dj) * nx + i + di];
                 if (zn === zn && z - zn < 3) continue;          // still roof
 
-                // the neighbour must be known and clearly lower
                 const t = swissGridIndex(top, e + di * cell, n + dj * cell);
                 if (t < 0) continue;
 
                 const zt = top.raw[t];
-                if (!(zt === zt) || z - zt < 3) continue;
+                if (!(zt === zt) || z - zt < 3) continue;       // neighbour unknown / not lower
 
                 E.push(e); N.push(n); DX.push(di); DY.push(dj); H.push(z - gz);
+                DIR.push(di === 1 ? 0 : di === -1 ? 1 : dj === 1 ? 2 : 3);
             }
         }
     }
 
-    return { E, N, DX, DY, H, count: E.length };
+    return { E, N, DX, DY, H, DIR, count: E.length };
 }
 
 /*
- * Mean brightness step across the given roof edges for one lean.
- * Inlined pixel lookups: this runs a few million times per estimate.
+ * Brightness step across the roof edges for a lean given per edge as
+ * k * (across vector) + a * (along vector). Only edges facing ACROSS the
+ * flight line are used (edges parallel to the displacement do not move
+ * with k); the sides facing towards and away from the line count equally.
  */
-function swissLeanScore(img, edges, idx, lx, ly) {
+function swissModelScore(img, edges, idx, k, a) {
     const { lum, width, height, originE, originN, invE, invN } = img;
-    const E = edges.E, N = edges.N, DX = edges.DX, DY = edges.DY, H = edges.H;
-    let sum = 0, used = 0;
+    const { E, N, DX, DY, H, DIR, AX, AY, LX, LY } = edges;
+    const B = SWISS_ROOF_CELL / 2;
+    const sum = [0, 0], used = [0, 0];
 
     for (let m = 0; m < idx.length; m++) {
-        const k = idx[m];
-        const h = H[k];
-        const e = E[k] + lx * h;
-        const n = N[k] + ly * h;
+        const q = idx[m];
+        const h = H[q];
+        const e = E[q] + (k * AX[q] + a * LX[q]) * h;
+        const n = N[q] + (k * AY[q] + a * LY[q]) * h;
 
-        const ia = Math.floor((e - 0.25 * DX[k] - originE) * invE);
-        const ja = Math.floor((originN - n + 0.25 * DY[k]) * invN);
-        const ib = Math.floor((e + 0.9 * DX[k] - originE) * invE);
-        const jb = Math.floor((originN - n - 0.9 * DY[k]) * invN);
+        // the roof boundary lies half a cell beyond the edge cell's centre;
+        // sample 0.5 m inside and 0.5 m outside of it
+        const bx = e + B * DX[q], by = n + B * DY[q];
+        const ia = Math.floor((bx - 0.5 * DX[q] - originE) * invE);
+        const ja = Math.floor((originN - by + 0.5 * DY[q]) * invN);
+        const ib = Math.floor((bx + 0.5 * DX[q] - originE) * invE);
+        const jb = Math.floor((originN - by - 0.5 * DY[q]) * invN);
 
         if (ia < 0 || ja < 0 || ib < 0 || jb < 0 ||
             ia >= width || ib >= width || ja >= height || jb >= height) continue;
 
         const d = lum[ja * width + ia] - lum[jb * width + ib];
-
-        sum += d < 0 ? -d : d;
-        used++;
+        sum[DIR[q]] += d < 0 ? -d : d;
+        used[DIR[q]]++;
     }
 
-    return used ? sum / used : 0;
-}
-
-function swissLeanSearch(img, edges, idx, cx, cy, range, step) {
-    let best = { lx: cx, ly: cy, score: -1 };
-
-    for (let lx = cx - range; lx <= cx + range + 1e-9; lx += step) {
-        for (let ly = cy - range; ly <= cy + range + 1e-9; ly += step) {
-            const score = swissLeanScore(img, edges, idx, lx, ly);
-            if (score > best.score) best = { lx, ly, score };
-        }
+    // both sides weighted equally (one side often has little contrast,
+    // e.g. grey roof on grey street; the other shows roof against facade)
+    let total = 0, sides = 0;
+    for (let side = 0; side < 2; side++) {
+        if (used[side] >= 10) { total += sum[side] / used[side]; sides++; }
     }
 
-    return best;
-}
-
-/* Coarse-to-fine search: 5 cm, 1 cm, 2.5 mm per metre of height. */
-function swissLeanSearchMulti(img, edges, idx, cx, cy, range) {
-    let best = swissLeanSearch(img, edges, swissSubsample(idx, 1500), cx, cy, range, Math.max(0.02, range / 10));
-    best = swissLeanSearch(img, edges, swissSubsample(idx, 4000), best.lx, best.ly, 0.05, 0.01);
-    best = swissLeanSearch(img, edges, swissSubsample(idx, 8000), best.lx, best.ly, 0.01, 0.0025);
-    return best;
+    return sides ? total / sides : 0;
 }
 
 function swissSubsample(indices, max) {
@@ -1483,97 +1616,88 @@ function swissSubsample(indices, max) {
 let swissLeanCounter = 0;
 
 function swissEstimateLean(raster, mapper) {
-    const img = swissImageDescriptor(raster);
-    const grids = getSwissGrids(mapper);
-
-    swissGroundRefresh(grids, true);
-
     const fail = reason => ({ ok: false, id: `none-${++swissLeanCounter}`, reason });
+    const strips = raster.strips || [];
 
-    if (!img) return fail("only possible with LV95 rasters");
+    if (!strips.length) {
+        return fail(raster.stripNote || "no SWISSIMAGE flight strips known for this image");
+    }
+
+    const img = swissImageDescriptor(raster);
+    if (!img) return fail("only possible with the SWISSIMAGE GeoTIFF");
+
+    const grids = getSwissGrids(mapper);
+    swissGroundRefresh(grids, true);
 
     const edges = swissRoofEdges(grids);
 
-    if (edges.count < 80) {
-        return fail(`too few tall roof edges (${edges.count})`);
+    // per edge: across vector (scaled by distance) and along vector of its strip
+    const keep = [];
+    edges.AX = new Float32Array(edges.count);
+    edges.AY = new Float32Array(edges.count);
+    edges.LX = new Float32Array(edges.count);
+    edges.LY = new Float32Array(edges.count);
+
+    for (let q = 0; q < edges.count; q++) {
+        const st = swissNearestStrip(strips, edges.E[q], edges.N[q], SWISS_STRIP_D);
+        if (!st) continue;
+
+        const d = SWISS_STRIP_D[0];
+
+        // edge normal against the displacement direction (away from the line)
+        const c = (edges.DX[q] * st.vx + edges.DY[q] * st.vy) * (d < 0 ? -1 : 1);
+        if (Math.abs(c) < 0.5) continue;          // edge parallel to the displacement
+
+        edges.AX[q] = d * st.vx;
+        edges.AY[q] = d * st.vy;
+        edges.LX[q] = 0;
+        edges.LY[q] = 0;
+        edges.DIR[q] = c > 0 ? 0 : 1;             // facing away from / towards the line
+        keep.push(q);
     }
 
-    const all = Array.from({ length: edges.count }, (_, i) => i);
-
-    // whole tile: up to 5 m per 10 m of height in any direction
-    const fine = swissLeanSearchMulti(img, edges, all, 0, 0, 0.5);
-    const zero = swissLeanScore(img, edges, swissSubsample(all, 10000), 0, 0);
-
-    // no clear improvement over "no correction": do not guess
-    if (fine.score < zero * 1.03) {
-        return fail("no clear displacement found");
+    if (keep.length < 80) {
+        return fail(`too few tall roof edges inside the flight strips (${keep.length})`);
     }
 
-    // per 250 m block, around the tile value
-    const bx = Math.max(1, Math.ceil((mapper.maxE - mapper.minE) / SWISS_LEAN_BLOCK));
-    const by = Math.max(1, Math.ceil((mapper.maxN - mapper.minN) / SWISS_LEAN_BLOCK));
-    const lx = new Float32Array(bx * by).fill(fine.lx);
-    const ly = new Float32Array(bx * by).fill(fine.ly);
-    const blocks = Array.from({ length: bx * by }, () => []);
+    const coarseIdx = swissSubsample(keep, 2500);
+    const fineIdx = swissSubsample(keep, 10000);
 
-    for (let k = 0; k < edges.count; k++) {
-        const i = Math.min(bx - 1, Math.max(0, Math.floor((edges.E[k] - mapper.minE) / SWISS_LEAN_BLOCK)));
-        const j = Math.min(by - 1, Math.max(0, Math.floor((edges.N[k] - mapper.minN) / SWISS_LEAN_BLOCK)));
-        blocks[j * bx + i].push(k);
+    // k = 1 / flying height, from 1/500 m to 1/10 km. The colour comes from
+    // the camera's vertical (nadir) line, so there is no along-track term:
+    // with north-south strips it would only mimic the north-pointing shadows.
+    let best = { k: 0, a: 0, score: -1 };
+
+    for (let k = 0.0001; k <= 0.002 + 1e-12; k += 0.00002) {
+        const score = swissModelScore(img, edges, coarseIdx, k, 0);
+        if (score > best.score) best = { k, a: 0, score };
     }
 
-    let refined = 0;
+    const k0 = best.k;
+    best.score = -1;
 
-    blocks.forEach((idx, b) => {
-        if (idx.length < 150) return;
+    for (let k = Math.max(0.0001, k0 - 0.00003); k <= k0 + 0.00003 + 1e-12; k += 0.000002) {
+        const score = swissModelScore(img, edges, fineIdx, k, 0);
+        if (score > best.score) best = { k, a: 0, score };
+    }
 
-        const sub = swissSubsample(idx, 3000);
-        const local = swissLeanSearchMulti(img, edges, sub, fine.lx, fine.ly, 0.1);
-        const atTile = swissLeanScore(img, edges, sub, fine.lx, fine.ly);
+    const zero = swissModelScore(img, edges, fineIdx, 0, 0);
 
-        if (local.score > atTile * 1.03) {
-            lx[b] = local.lx;
-            ly[b] = local.ly;
-            refined++;
-        }
-    });
+    if (best.score < zero * 1.03) {
+        return fail("the image shows no clear displacement");
+    }
 
     return {
         ok: true,
-        id: `est-${++swissLeanCounter}`,
-        lx: fine.lx,
-        ly: fine.ly,
-        gain: fine.score / Math.max(1e-9, zero),
-        edges: edges.count,
-        refined,
-        field: { minE: mapper.minE, minN: mapper.minN, size: SWISS_LEAN_BLOCK, nx: bx, ny: by, lx, ly }
+        model: "strips",
+        id: `strips-${++swissLeanCounter}`,
+        k: best.k,
+        a: best.a,
+        flyingHeight: 1 / best.k,
+        strips,
+        edges: keep.length,
+        gain: best.score / Math.max(1e-9, zero)
     };
-}
-
-/* Bilinear lean between block centres. */
-function swissLeanAt(estimate, e, n, out) {
-    const f = estimate.field;
-    let u = (e - f.minE) / f.size - 0.5;
-    let v = (n - f.minN) / f.size - 0.5;
-
-    u = u < 0 ? 0 : u > f.nx - 1 ? f.nx - 1 : u;
-    v = v < 0 ? 0 : v > f.ny - 1 ? f.ny - 1 : v;
-
-    const i = Math.min(f.nx - 2, Math.floor(u)), j = Math.min(f.ny - 2, Math.floor(v));
-
-    if (f.nx < 2 || f.ny < 2) {
-        const k = Math.round(v) * f.nx + Math.round(u);
-        out[0] = f.lx[k]; out[1] = f.ly[k];
-        return out;
-    }
-
-    const fu = u - i, fv = v - j;
-    const k = j * f.nx + i;
-    const w00 = (1 - fu) * (1 - fv), w10 = fu * (1 - fv), w01 = (1 - fu) * fv, w11 = fu * fv;
-
-    out[0] = f.lx[k] * w00 + f.lx[k + 1] * w10 + f.lx[k + f.nx] * w01 + f.lx[k + f.nx + 1] * w11;
-    out[1] = f.ly[k] * w00 + f.ly[k + 1] * w10 + f.ly[k + f.nx] * w01 + f.ly[k + f.nx + 1] * w11;
-    return out;
 }
 
 /* Run the estimate for the current raster (COPC: after the grids were fed). */
@@ -1586,11 +1710,11 @@ function swissUpdateLeanEstimate(raster, mapper) {
     const est = raster.leanEstimate;
 
     const text = est.ok
-        ? `Tower lean estimated from ${est.edges.toLocaleString()} roof edges: ` +
-          `${(est.lx * 10).toFixed(2)} m east, ${(est.ly * 10).toFixed(2)} m north per 10 m of height` +
-          (est.refined ? ` (refined in ${est.refined} block(s))` : "") +
+        ? `Tower lean: ${est.strips.length} flight strip(s) of ${raster.year}, ` +
+          `flying height ≈ ${Math.round(est.flyingHeight).toLocaleString()} m above ground ` +
+          `(fitted on ${est.edges.toLocaleString()} roof edges)` +
           (SWISS_ALTI.note ? `; terrain: ${SWISS_ALTI.note}` : "") + ` [${ms} ms]`
-        : `Tower lean not estimated: ${est.reason}.`;
+        : `Tower lean not corrected: ${est.reason}.`;
 
     console.info("[colour]", text);
     window.dispatchEvent(new CustomEvent("swiss-lean-estimate", { detail: { estimate: est, text } }));

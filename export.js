@@ -880,6 +880,60 @@
     }
 
     /* ============================================================
+       All points of the current tile, full resolution (used by trees.js)
+       ============================================================ */
+
+    /*
+     * Calls fn(e, n, z, cls) for every point of the current tile, in LV95.
+     * LAZ tiles come from memory; COPC tiles are read node by node like the
+     * full export. onProgress(done, total) reports points processed.
+     */
+    async function forEachTilePoint(fn, onProgress) {
+        const cloud = currentPointCloud;
+
+        if (cloud?.isLaz && cloud.userData.data?.pos) {
+            const d = cloud.userData.data;
+            const [ox, oy, oz] = d.origin;
+            const pos = d.pos, cls = d.cls;
+
+            for (let i = 0; i < d.count; i++) {
+                fn(ox + pos[i * 3], oy + pos[i * 3 + 1], oz + pos[i * 3 + 2], cls ? cls[i] : -1);
+                if (onProgress && (i & 0xfffff) === 0) onProgress(i, d.count);
+            }
+
+            onProgress?.(d.count, d.count);
+            return d.count;
+        }
+
+        const url = currentTile && getCopcUrl(currentTile);
+        if (!url) throw new Error("No point-cloud file for this tile.");
+
+        const reader = await openCopc(url);
+        const nodes = Object.values(reader.nodes).filter(node => node && node.pointCount);
+        const total = nodes.reduce((sum, node) => sum + node.pointCount, 0);
+        let done = 0;
+
+        for (const node of nodes) {
+            const view = await reader.loadView(node);
+            const X = getter(view, "X"), Y = getter(view, "Y"), Z = getter(view, "Z");
+            const C = getter(view, "Classification");
+
+            if (!X || !Y || !Z) throw new Error("COPC point data has no X/Y/Z dimensions.");
+
+            for (let i = 0; i < view.pointCount; i++) {
+                fn(X(i), Y(i), Z(i), C ? C(i) : -1);
+            }
+
+            done += view.pointCount;
+            onProgress?.(done, total);
+        }
+
+        return total;
+    }
+
+    window.swissTilePoints = { forEach: forEachTilePoint };
+
+    /* ============================================================
        Init
        ============================================================ */
 

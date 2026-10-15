@@ -284,9 +284,14 @@
                     <label for="trees-style" class="control-label">Crowns</label>
                     <select id="trees-style">
                         <option value="blob">Soft volume</option>
+                        <option value="geometric">Geometric (calm, professional)</option>
                         <option value="none">Hidden</option>
                     </select>
                     <label><input id="trees-bytype" type="checkbox" checked> Colour by leaf type (estimated: needle blue-green, broadleaf yellow-green)</label>
+                    <label for="trees-season">Season <output id="trees-season-out">Jul</output></label>
+                    <input id="trees-season" type="range" min="1" max="12.9" step="0.1" value="7">
+                    <label for="trees-years">Growth <output id="trees-years-out">today</output></label>
+                    <input id="trees-years" type="range" min="0" max="100" step="5" value="0">
                     <label for="trees-opacity">Crown opacity</label>
                     <input id="trees-opacity" type="range" min="0.1" max="1" step="0.05" value="0.6">
                 </div>
@@ -330,6 +335,52 @@
         </details>
 
         <details class="fold" open>
+            <summary>3D print (STL)</summary>
+            <div class="fold-body">
+                <div class="ctrl">
+                    <label for="print-scale" class="control-label">Scale</label>
+                    <select id="print-scale">
+                        <option value="500">1:500</option>
+                        <option value="1000">1:1000</option>
+                        <option value="2000" selected>1:2000</option>
+                        <option value="5000">1:5000</option>
+                        <option value="10000">1:10000</option>
+                    </select>
+                    <label for="print-exag" class="control-label">Vertical exaggeration</label>
+                    <select id="print-exag">
+                        <option value="1" selected>1× (true)</option>
+                        <option value="1.5">1.5×</option>
+                        <option value="2">2×</option>
+                        <option value="3">3×</option>
+                    </select>
+                    <label for="print-base" class="control-label">Base thickness</label>
+                    <select id="print-base">
+                        <option value="3">3 mm</option>
+                        <option value="5" selected>5 mm</option>
+                        <option value="10">10 mm</option>
+                    </select>
+                    <label for="print-detail" class="control-label">Detail</label>
+                    <select id="print-detail">
+                        <option value="300">Coarse (300 cells per side)</option>
+                        <option value="500" selected>Medium (500)</option>
+                        <option value="800">Fine (800, large file)</option>
+                    </select>
+                    <div id="print-info" class="section-info">Build surfaces first – the print uses the same area.</div>
+                    <span class="control-label">Terrain</span>
+                    <button id="print-terrain-pos" type="button">Positive</button>
+                    <button id="print-terrain-neg" type="button">Negative mould</button>
+                    <span class="control-label">Terrain + buildings</span>
+                    <button id="print-all-pos" type="button">Positive</button>
+                    <button id="print-all-neg" type="button">Negative mould</button>
+                    <div class="section-info">
+                        Closed solids in millimetres. The mould is mirrored and has a rim: pour into it and
+                        turn the cast over. Roof overhangs become vertical (printable without supports).
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <details class="fold" open>
             <summary>Light &amp; atmosphere</summary>
             <div class="fold-body">
                 <div class="ctrl">
@@ -344,9 +395,30 @@
                     <input id="atmo-fogdist" type="range" min="200" max="6000" step="100" value="1500">
                     <label><input id="atmo-sky" type="checkbox" checked> Sky in rendered images</label>
                     <label><input id="atmo-vignette" type="checkbox"> Vignette in rendered images</label>
+                    <label><input id="atmo-dof" type="checkbox"> Depth of field (tilt-shift) in rendered images</label>
+                    <label for="atmo-dof-focus">Sharp band (top → bottom)</label>
+                    <input id="atmo-dof-focus" type="range" min="0.15" max="0.9" step="0.05" value="0.6">
+                    <label for="atmo-dof-strength">Blur strength</label>
+                    <input id="atmo-dof-strength" type="range" min="0" max="1" step="0.1" value="0.5">
+                    <span class="control-label">Scale figures</span>
+                    <label><input id="figures-on" type="checkbox"> Show scale figures (needs surfaces)</label>
+                    <label for="figures-count" class="control-label">Number</label>
+                    <select id="figures-count">
+                        <option value="8">8</option>
+                        <option value="16" selected>16</option>
+                        <option value="30">30</option>
+                        <option value="60">60</option>
+                    </select>
+                    <label for="figures-radius" class="control-label">Around the view centre</label>
+                    <select id="figures-radius">
+                        <option value="25">25 m</option>
+                        <option value="60" selected>60 m</option>
+                        <option value="150">150 m</option>
+                    </select>
+                    <button id="figures-shuffle" type="button">New arrangement</button>
                     <div class="section-info">
-                        Sun, shadows and fog act on the surfaces and tree crowns, live in the viewer and in
-                        the renders. Points are not shaded.
+                        Sun, shadows and fog act on surfaces, tree crowns and figures, live in the viewer and
+                        in the renders; trees and figures also cast shadows. Points are not shaded.
                     </div>
                 </div>
             </div>
@@ -584,6 +656,8 @@
 <script src="./trees.js"></script>
 <script src="./buildings3d.js"></script>
 <script src="./surfaces.js"></script>
+<script src="./figures.js"></script>
+<script src="./print.js"></script>
 <script src="./render.js"></script>
 <script src="./counter.js"></script>
 

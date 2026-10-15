@@ -42,7 +42,9 @@
     const state = {
         result: null,       // { trees, origin, extent, tileKey }
         group: null,
-        busy: false
+        busy: false,
+        month: 7,           // season of the crowns (1..12.99)
+        years: 0            // growth: years from now
     };
 
     /* ============================================================
@@ -373,11 +375,11 @@
        SOFT CROWN VOLUME ("blob")
        ============================================================ */
 
-    let icoCache = null;
+    const icoCache = new Map();
 
-    /* Icosphere (subdivision 2: 162 vertices) with vertex neighbours. */
-    function icosphere() {
-        if (icoCache) return icoCache;
+    /* Icosphere with vertex neighbours: level 1 = 42, level 2 = 162 vertices. */
+    function icosphere(level = 2) {
+        if (icoCache.has(level)) return icoCache.get(level);
 
         const t = (1 + Math.sqrt(5)) / 2;
         let v = [[-1, t, 0], [1, t, 0], [-1, -t, 0], [1, -t, 0], [0, -1, t], [0, 1, t],
@@ -387,7 +389,7 @@
                  [11, 10, 2], [10, 7, 6], [7, 1, 8], [3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8],
                  [3, 8, 9], [4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]];
 
-        for (let s = 0; s < 2; s++) {
+        for (let s = 0; s < level; s++) {
             const mid = new Map();
             const half = (a, b) => {
                 const key = a < b ? `${a}_${b}` : `${b}_${a}`;
@@ -410,21 +412,32 @@
             nb[a].add(b); nb[a].add(c); nb[b].add(a); nb[b].add(c); nb[c].add(a); nb[c].add(b);
         }
 
-        icoCache = { v, f, nb: nb.map(s => [...s]) };
-        return icoCache;
+        const result = { v, f, nb: nb.map(s => [...s]) };
+        icoCache.set(level, result);
+        return result;
     }
 
     /*
-     * Crown blob for one tree: for every icosphere direction, how far the
-     * crown points reach (85th percentile), filled and smoothed. Returns
-     * vertices relative to the tree's stem foot (e, n, groundZ), Z up.
+     * Crown styles:
+     *   blob       soft, organic: 162 directions, light smoothing, a little noise
+     *   geometric  calm, faceted: 42 directions, strong smoothing, no noise
      */
-    function crownBlob(tree) {
-        const { v, f, nb } = icosphere();
+    const CROWN = {
+        blob: { level: 2, smooth: 3, noise: 0.1 },
+        geometric: { level: 1, smooth: 6, noise: 0 }
+    };
+
+    /*
+     * Crown for one tree: for every icosphere direction, how far the crown
+     * points reach (85th percentile), filled and smoothed. Vertices relative
+     * to the stem foot (e, n, groundZ), Z up.
+     */
+    function crownBlob(tree, style = "blob") {
+        const opts = CROWN[style] || CROWN.blob;
+        const { v, f, nb } = icosphere(opts.level);
         const top = tree.height, base = tree.crownBase;
         const r0 = Math.max(0.8, tree.crownDiameter / 2);
 
-        // centre: crown centroid in plan, middle of the crown in height
         const pts = [];
         for (let p = 0; p + 2 < tree.points.length; p += 3) {
             if (tree.points[p + 2] >= base) pts.push(tree.points[p] - tree.e, tree.points[p + 1] - tree.n, tree.points[p + 2]);
@@ -439,12 +452,10 @@
         const halfH = Math.max(0.6, (top - base) / 2);
 
         const bins = v.map(() => []);
-
         for (let p = 0; p < pts.length; p += 3) {
             const dx = pts[p] - cx, dy = pts[p + 1] - cy, dz = pts[p + 2] - cz;
             const r = Math.hypot(dx, dy, dz);
             if (r < 1e-6) continue;
-
             let best = 0, bestDot = -2;
             for (let q = 0; q < v.length; q++) {
                 const d = (v[q][0] * dx + v[q][1] * dy + v[q][2] * dz) / r;
@@ -453,7 +464,6 @@
             bins[best].push(r);
         }
 
-        // reach per direction; empty directions from an ellipsoid guess
         let radius = bins.map((b, q) => {
             if (b.length >= 2) {
                 b.sort((x, y) => x - y);
@@ -463,29 +473,21 @@
             return 1 / Math.sqrt((x * x + y * y) / (r0 * r0) + (z * z) / (halfH * halfH));
         });
 
-        // smoothing: soft, organic surface
-        for (let it = 0; it < 3; it++) {
+        for (let it = 0; it < opts.smooth; it++) {
             radius = radius.map((r, q) => {
                 const m = nb[q].reduce((s, o) => s + radius[o], 0) / nb[q].length;
                 return 0.45 * r + 0.55 * m;
             });
         }
 
-        // a little irregularity, stable per tree
         let h = (tree.id * 2654435761) >>> 0;
         const noise = () => { h = (h ^ (h << 13)) >>> 0; h = (h ^ (h >>> 17)) >>> 0; h = (h ^ (h << 5)) >>> 0; return h / 4294967296; };
 
-        const positions = [];
-        const shade = [];
-
+        const positions = [], shade = [];
         v.forEach(([x, y, z], q) => {
-            let r = radius[q] * (0.95 + 0.1 * noise());
-
-            // stay between crown base and tree top: shorten the whole
-            // direction, so the blob does not get flat and wide
+            let r = radius[q] * (1 - opts.noise / 2 + opts.noise * noise());
             if (z > 1e-6) r = Math.min(r, (top + 0.3 - cz) / z);
             if (z < -1e-6) r = Math.min(r, (base * 0.9 - cz) / z);
-
             const pz = cz + z * r;
             positions.push(cx + x * r, cy + y * r, pz);
             shade.push(Math.max(0, Math.min(1, (pz - base) / Math.max(0.5, top - base))));
@@ -495,21 +497,20 @@
     }
 
     /*
-     * Stem: tapered 8-sided body from the stem foot into the middle of the
-     * crown (it disappears inside the soft crown volume). Thickness grows
-     * with tree height and crown size. Relative to the stem foot, Z up.
+     * Stem, relative to the stem foot, Z up.
+     *   blob       tapered 8-sided body leaning into the crown centre
+     *   geometric  slim straight 6-sided cylinder, vertical
      */
-    function stemGeometry(tree) {
-        const blob = tree.blob || (tree.blob = crownBlob(tree));
-        const [cx, cy, cz] = blob.centre;
+    function stemGeometry(tree, style = "blob", centre = null) {
+        const [cx, cy, cz] = centre || crownBlob(tree, style).centre;
         const r0 = Math.min(0.45, Math.max(0.06, 0.012 * tree.height + 0.01 * tree.crownDiameter));
-        const r1 = r0 * 0.45;
-        const sides = 8;
+        const geometric = style === "geometric";
+        const sides = geometric ? 6 : 8;
+        const rings = geometric
+            ? [[0, 0, -0.2, r0 * 0.55], [0, 0, cz, r0 * 0.45]]
+            : [[0, 0, -0.2, r0], [cx * 0.5, cy * 0.5, tree.crownBase, r0 * 0.75], [cx, cy, cz, r0 * 0.45]];
+
         const positions = [], shade = [], faces = [];
-
-        // foot below the stem point, top at the crown centre (slight lean allowed)
-        const rings = [[0, 0, -0.2, r0], [cx * 0.5, cy * 0.5, tree.crownBase, r0 * 0.75], [cx, cy, cz, r1]];
-
         rings.forEach(([x, y, z, r], ringIndex) => {
             for (let s = 0; s < sides; s++) {
                 const a = (s / sides) * Math.PI * 2;
@@ -517,16 +518,89 @@
                 shade.push(ringIndex / (rings.length - 1));
             }
         });
-
         for (let ring = 0; ring < rings.length - 1; ring++) {
             for (let s = 0; s < sides; s++) {
                 const a = ring * sides + s, b = ring * sides + (s + 1) % sides;
                 faces.push([a, b, b + sides], [a, b + sides, a + sides]);
             }
         }
-
         return { positions, shade, faces };
     }
+
+    /* ---------- growth over the coming years ---------- */
+
+    /*
+     * Height approaches a typical final height (Chapman-Richards-like):
+     * young trees grow fast, old trees hardly. Crowns widen a little less
+     * than the height grows.
+     */
+    const FINAL_HEIGHT = { needle: 38, broadleaf: 32, unknown: 34 };
+
+    function growth(tree, years) {
+        if (!years) return { sz: 1, sxy: 1 };
+        let hMax = FINAL_HEIGHT[tree.leafType] || 34;
+        if (tree.height >= 0.95 * hMax) hMax = tree.height * 1.08;
+        const h = hMax - (hMax - tree.height) * Math.exp(-0.03 * years);
+        const sz = h / tree.height;
+        return { sz, sxy: Math.pow(sz, 0.85) };
+    }
+
+    /* Crown + stem of one tree for a style and a number of years from now. */
+    function treeGeometry(tree, style, years) {
+        tree._crowns = tree._crowns || {};
+        const crown = tree._crowns[style] || (tree._crowns[style] = crownBlob(tree, style));
+        const { sz, sxy } = growth(tree, years);
+
+        const positions = crown.positions.slice();
+        for (let p = 0; p < positions.length; p += 3) {
+            positions[p] *= sxy; positions[p + 1] *= sxy; positions[p + 2] *= sz;
+        }
+
+        const grown = { ...tree, height: tree.height * sz, crownBase: tree.crownBase * sz, crownDiameter: tree.crownDiameter * sxy };
+        const [cx, cy, cz] = crown.centre;
+        const stem = stemGeometry(grown, style, [cx * sxy, cy * sxy, cz * sz]);
+
+        return { crown: { positions, shade: crown.shade, faces: crown.faces }, stem, height: grown.height };
+    }
+
+    /* ---------- seasons (broadleaf only; conifers stay green) ---------- */
+
+    // month (1..12.99) -> [low colour, high colour, opacity] of broadleaf crowns
+    const SEASON = [
+        [1,    [0.36, 0.31, 0.27], [0.56, 0.50, 0.44], 0.32],    // bare
+        [3.5,  [0.38, 0.36, 0.27], [0.62, 0.60, 0.42], 0.42],    // buds
+        [4.6,  [0.32, 0.50, 0.19], [0.76, 0.88, 0.46], 0.78],    // fresh green
+        [6.5,  [0.21, 0.40, 0.15], [0.60, 0.75, 0.40], 1.0],     // summer
+        [8.7,  [0.24, 0.38, 0.15], [0.60, 0.69, 0.35], 1.0],     // late summer
+        [10.1, [0.55, 0.28, 0.10], [0.95, 0.66, 0.25], 0.9],     // autumn
+        [11.1, [0.45, 0.30, 0.18], [0.75, 0.55, 0.32], 0.55],    // late autumn
+        [12.5, [0.36, 0.31, 0.27], [0.56, 0.50, 0.44], 0.32]     // bare
+    ];
+
+    function seasonPalette(month, muted) {
+        let m = month < 1 ? month + 12 : month;
+        if (m > SEASON[SEASON.length - 1][0]) m -= 12;
+        let k = 0;
+        while (k < SEASON.length - 2 && SEASON[k + 1][0] <= m) k++;
+        const [m0, l0, h0, a0] = SEASON[k], [m1, l1, h1, a1] = SEASON[k + 1];
+        const t = Math.min(1, Math.max(0, (m - m0) / (m1 - m0)));
+        const mix = (a, b) => a.map((v, i) => v + (b[i] - v) * t);
+
+        // conifers: slightly darker in winter
+        const winter = 0.5 + 0.5 * Math.cos(((month - 1) / 12) * Math.PI * 2);
+        const needleLow = [0.10, 0.27, 0.22].map(v => v * (1 - 0.15 * winter));
+        const needleHigh = [0.34, 0.55, 0.47].map(v => v * (1 - 0.15 * winter));
+
+        // professional style: calmer, less saturated colours
+        const tone = c => muted ? c.map(v => v * 0.55 + 0.45 * (c[0] + c[1] + c[2]) / 3 + 0.04) : c;
+
+        return {
+            broadLow: tone(mix(l0, l1)), broadHigh: tone(mix(h0, h1)), broadAlpha: a0 + (a1 - a0) * t,
+            needleLow: tone(needleLow), needleHigh: tone(needleHigh)
+        };
+    }
+
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
     /* ============================================================
        THREE.JS DISPLAY
@@ -558,9 +632,16 @@
 
     const BLOB_FRAGMENT = `
         uniform float uOpacity;
-        uniform vec3 uLow;
+        uniform vec3 uLow;          // stems: bark colours
         uniform vec3 uHigh;
+        uniform float uStem;        // 1: stem material
         uniform float uByType;      // 1: colour by leaf type
+        uniform vec3 uBroadLow;
+        uniform vec3 uBroadHigh;
+        uniform float uBroadAlpha;
+        uniform vec3 uNeedleLow;
+        uniform vec3 uNeedleHigh;
+        uniform float uSoftEdge;    // 1: hazy silhouette (soft volume), 0: calm (geometric)
         ${ATMO.fragmentDecl}
         varying vec3 vNormal;
         varying vec3 vView;
@@ -570,20 +651,28 @@
 
         void main() {
             vec3 n = normalize(vNormal);
-            // edges facing away from the viewer fade out: soft, hazy silhouette
             float facing = abs(dot(n, normalize(vView)));
             float soft = smoothstep(0.0, 0.85, facing);
             float light = 0.55 + 0.45 * max(dot(n, vLight), 0.0);
+
             vec3 low = uLow, high = uHigh;
-            if (uByType > 0.5) {
-                // broadleaf: fresh yellow-green, needle: deep blue-green
-                vec3 bLow = vec3(0.25, 0.42, 0.16), bHigh = vec3(0.73, 0.83, 0.47);
-                vec3 nLow = vec3(0.10, 0.27, 0.22), nHigh = vec3(0.34, 0.55, 0.47);
-                low = vType < 0.25 ? bLow : (vType > 0.75 ? nLow : uLow);
-                high = vType < 0.25 ? bHigh : (vType > 0.75 ? nHigh : uHigh);
+            float alpha = 1.0;
+
+            if (uStem < 0.5) {
+                if (uByType > 0.5 && vType < 0.25) {
+                    low = uBroadLow; high = uBroadHigh; alpha = uBroadAlpha;
+                } else if (uByType > 0.5 && vType > 0.75) {
+                    low = uNeedleLow; high = uNeedleHigh;
+                } else {
+                    low = mix(uBroadLow, uNeedleLow, 0.5);
+                    high = mix(uBroadHigh, uNeedleHigh, 0.5);
+                    alpha = mix(uBroadAlpha, 1.0, 0.5);
+                }
+                alpha *= uOpacity * mix(0.75 + 0.25 * soft, 0.12 + 0.88 * soft, uSoftEdge);
             }
+
             vec3 colour = atmoShade(mix(low, high, vShade) * (0.8 + 0.2 * light));
-            gl_FragColor = vec4(colour, uOpacity * (0.12 + 0.88 * soft));
+            gl_FragColor = vec4(colour, alpha);
         }
     `;
 
@@ -604,7 +693,46 @@
         return [0, 0];
     }
 
-    function buildGroup(result, style, opacity) {
+    /* Indexed -> flat-shaded (each triangle its own normal): faceted look. */
+    function flatten(positions, shade, type, index) {
+        const P = [], S = [], T = [];
+        for (let i = 0; i < index.length; i++) {
+            const k = index[i];
+            P.push(positions[k * 3], positions[k * 3 + 1], positions[k * 3 + 2]);
+            S.push(shade[k]);
+            T.push(type[k]);
+        }
+        return { positions: P, shade: S, type: T };
+    }
+
+    function treeMaterial(stem, style, opacity) {
+        const palette = seasonPalette(state.month, style === "geometric");
+        const colour = c => new THREE.Color(c[0], c[1], c[2]);
+
+        return new THREE.ShaderMaterial({
+            uniforms: {
+                ...ATMO.uniforms(),
+                uStem: { value: stem ? 1 : 0 },
+                uByType: { value: el("trees-bytype")?.checked !== false ? 1 : 0 },
+                uOpacity: { value: opacity },
+                uSoftEdge: { value: style === "geometric" ? 0 : 1 },
+                uLow: { value: new THREE.Color(style === "geometric" ? 0x55504a : 0x4a3a2c) },
+                uHigh: { value: new THREE.Color(style === "geometric" ? 0x8c8780 : 0x8a7560) },
+                uBroadLow: { value: colour(palette.broadLow) },
+                uBroadHigh: { value: colour(palette.broadHigh) },
+                uBroadAlpha: { value: palette.broadAlpha },
+                uNeedleLow: { value: colour(palette.needleLow) },
+                uNeedleHigh: { value: colour(palette.needleHigh) }
+            },
+            vertexShader: BLOB_VERTEX,
+            fragmentShader: BLOB_FRAGMENT,
+            transparent: !stem,
+            depthWrite: !!stem,
+            side: THREE.FrontSide
+        });
+    }
+
+    function buildGroup(result, style, opacity, years) {
         const { trees, origin } = result;
         const group = new THREE.Group();
         group.name = "swiss-trees";
@@ -612,91 +740,64 @@
         const [ox, oy] = worldOffset(result.extent);
         group.position.set(origin[0] + ox, origin[1] + oy, origin[2]);
 
-        // stems: tapered bodies, shaded like the crowns
-        {
-            const positions = [], shade = [], index = [];
+        const typeValue = { broadleaf: 0, unknown: 0.5, needle: 1 };
+        const parts = { stem: { positions: [], shade: [], type: [], index: [] }, crown: { positions: [], shade: [], type: [], index: [] } };
 
-            for (const t of trees) {
-                const stem = stemGeometry(t);
-                const offset = positions.length / 3;
-                const x0 = t.e - origin[0], y0 = t.n - origin[1], z0 = t.groundZ - origin[2];
+        for (const t of trees) {
+            const geo = treeGeometry(t, style, years);
+            const x0 = t.e - origin[0], y0 = t.n - origin[1], z0 = t.groundZ - origin[2];
 
-                for (let p = 0; p < stem.positions.length; p += 3) {
-                    positions.push(stem.positions[p] + x0, stem.positions[p + 1] + y0, stem.positions[p + 2] + z0);
+            for (const [name, part] of [["stem", geo.stem], ["crown", geo.crown]]) {
+                const target = parts[name];
+                const offset = target.positions.length / 3;
+                for (let p = 0; p < part.positions.length; p += 3) {
+                    target.positions.push(part.positions[p] + x0, part.positions[p + 1] + y0, part.positions[p + 2] + z0);
+                    target.type.push(name === "crown" ? (typeValue[t.leafType] ?? 0.5) : 0.5);
                 }
-                shade.push(...stem.shade);
-                for (const [a, b, c] of stem.faces) index.push(a + offset, b + offset, c + offset);
+                target.shade.push(...part.shade);
+                for (const [a, b, c] of part.faces) target.index.push(a + offset, b + offset, c + offset);
             }
-
-            const g = new THREE.BufferGeometry();
-            setAttr(g, "position", new THREE.Float32BufferAttribute(positions, 3));
-            setAttr(g, "aShade", new THREE.Float32BufferAttribute(shade, 1));
-            setAttr(g, "aType", new THREE.Float32BufferAttribute(new Float32Array(shade.length).fill(0.5), 1));
-            g.setIndex(index);
-            g.computeVertexNormals();
-
-            const mesh = new THREE.Mesh(g, new THREE.ShaderMaterial({
-                uniforms: {
-                    ...ATMO.uniforms(),
-                    uByType: { value: 0 },
-                    uOpacity: { value: 1 },
-                    uLow: { value: new THREE.Color(0x4a3a2c) },
-                    uHigh: { value: new THREE.Color(0x8a7560) }
-                },
-                vertexShader: BLOB_VERTEX,
-                fragmentShader: BLOB_FRAGMENT,
-                transparent: false
-            }));
-            mesh.name = "swiss-tree-stems";
-            group.add(mesh);
         }
 
-        if (style !== "none") {
-            const positions = [], shade = [], index = [], type = [];
-            const typeValue = { broadleaf: 0, unknown: 0.5, needle: 1 };
+        for (const name of ["stem", "crown"]) {
+            let { positions, shade, type, index } = parts[name];
+            const g = new THREE.BufferGeometry();
 
-            for (const t of trees) {
-                const blob = t.blob || (t.blob = crownBlob(t));
-                for (let q = 0; q < blob.shade.length; q++) type.push(typeValue[t.leafType] ?? 0.5);
-                const offset = positions.length / 3;
-                const x0 = t.e - origin[0], y0 = t.n - origin[1], z0 = t.groundZ - origin[2];
-
-                for (let p = 0; p < blob.positions.length; p += 3) {
-                    positions.push(blob.positions[p] + x0, blob.positions[p + 1] + y0, blob.positions[p + 2] + z0);
-                }
-                shade.push(...blob.shade);
-                for (const [a, b, c] of blob.faces) index.push(a + offset, b + offset, c + offset);
+            if (style === "geometric") {
+                ({ positions, shade, type } = flatten(positions, shade, type, index));
+                setAttr(g, "position", new THREE.Float32BufferAttribute(positions, 3));
+                setAttr(g, "aShade", new THREE.Float32BufferAttribute(shade, 1));
+                setAttr(g, "aType", new THREE.Float32BufferAttribute(type, 1));
+                g.computeVertexNormals();      // non-indexed: one normal per facet
+            } else {
+                setAttr(g, "position", new THREE.Float32BufferAttribute(positions, 3));
+                setAttr(g, "aShade", new THREE.Float32BufferAttribute(shade, 1));
+                setAttr(g, "aType", new THREE.Float32BufferAttribute(type, 1));
+                g.setIndex(index);
+                g.computeVertexNormals();
             }
 
-            const g = new THREE.BufferGeometry();
-            setAttr(g, "position", new THREE.Float32BufferAttribute(positions, 3));
-            setAttr(g, "aShade", new THREE.Float32BufferAttribute(shade, 1));
-            setAttr(g, "aType", new THREE.Float32BufferAttribute(type, 1));
-            g.setIndex(index);
-            g.computeVertexNormals();
-
-            const material = new THREE.ShaderMaterial({
-                uniforms: {
-                    ...ATMO.uniforms(),
-                    uByType: { value: el("trees-bytype")?.checked !== false ? 1 : 0 },
-                    uOpacity: { value: opacity },
-                    uLow: { value: new THREE.Color(0x2f5d34) },
-                    uHigh: { value: new THREE.Color(0x9cc58a) }
-                },
-                vertexShader: BLOB_VERTEX,
-                fragmentShader: BLOB_FRAGMENT,
-                transparent: true,
-                depthWrite: false,
-                side: THREE.FrontSide
-            });
-
-            const mesh = new THREE.Mesh(g, material);
-            mesh.renderOrder = 10;
-            mesh.name = "swiss-tree-crowns";
+            const mesh = new THREE.Mesh(g, treeMaterial(name === "stem", style, opacity));
+            mesh.name = name === "stem" ? "swiss-tree-stems" : "swiss-tree-crowns";
+            if (name === "crown") mesh.renderOrder = 10;
             group.add(mesh);
         }
 
         return group;
+    }
+
+    /* Season: only colours change, no rebuild. */
+    function applySeason() {
+        const mesh = state.group?.getObjectByName("swiss-tree-crowns");
+        if (!mesh) return;
+        const style = el("trees-style")?.value || "blob";
+        const p = seasonPalette(state.month, style === "geometric");
+        const u = mesh.material.uniforms;
+        u.uBroadLow.value.setRGB(...p.broadLow);
+        u.uBroadHigh.value.setRGB(...p.broadHigh);
+        u.uBroadAlpha.value = p.broadAlpha;
+        u.uNeedleLow.value.setRGB(...p.needleLow);
+        u.uNeedleHigh.value.setRGB(...p.needleHigh);
     }
 
     function show() {
@@ -712,7 +813,7 @@
         if (style === "none") return;
 
         const opacity = Number(el("trees-opacity")?.value ?? 0.6);
-        state.group = buildGroup(state.result, style, opacity);
+        state.group = buildGroup(state.result, style, opacity, state.years);
         state.group.traverse(o => { if (o.isMesh) ATMO.attach(o); });
         viewer.scene.scene.add(state.group);
         ATMO.invalidate();
@@ -749,25 +850,22 @@
         ];
         let base = 1;
 
+        const style = (el("trees-style")?.value || "blob") === "geometric" ? "geometric" : "blob";
+
         for (const t of trees) {
-            const blob = t.blob || (t.blob = crownBlob(t));
+            const geo = treeGeometry(t, style, state.years);
             const x0 = t.e - origin[0], y0 = t.n - origin[1], z0 = t.groundZ - origin[2];
 
-            lines.push(`o tree_${String(t.id).padStart(4, "0")}_${t.leafType}_h${t.height.toFixed(1)}m`);
+            lines.push(`o tree_${String(t.id).padStart(4, "0")}_${t.leafType}_h${geo.height.toFixed(1)}m` +
+                (state.years ? `_in${state.years}y` : ""));
 
-            for (let p = 0; p < blob.positions.length; p += 3) {
-                lines.push(`v ${fix(blob.positions[p] + x0)} ${fix(blob.positions[p + 1] + y0)} ${fix(blob.positions[p + 2] + z0)}`);
+            for (const part of [geo.crown, geo.stem]) {
+                for (let p = 0; p < part.positions.length; p += 3) {
+                    lines.push(`v ${fix(part.positions[p] + x0)} ${fix(part.positions[p + 1] + y0)} ${fix(part.positions[p + 2] + z0)}`);
+                }
+                for (const [a, b, c] of part.faces) lines.push(`f ${a + base} ${b + base} ${c + base}`);
+                base += part.positions.length / 3;
             }
-            for (const [a, b, c] of blob.faces) lines.push(`f ${a + base} ${b + base} ${c + base}`);
-            base += blob.positions.length / 3;
-
-            // stem: same tapered body as in the viewer
-            const stem = stemGeometry(t);
-            for (let p = 0; p < stem.positions.length; p += 3) {
-                lines.push(`v ${fix(stem.positions[p] + x0)} ${fix(stem.positions[p + 1] + y0)} ${fix(stem.positions[p + 2] + z0)}`);
-            }
-            for (const [a, b, c] of stem.faces) lines.push(`f ${a + base} ${b + base} ${c + base}`);
-            base += stem.positions.length / 3;
         }
 
         download(`${baseName()}_origin_${origin.join("_")}.obj`, lines.join("\n"), "text/plain");
@@ -890,6 +988,20 @@
     document.addEventListener("DOMContentLoaded", () => {
         el("trees-detect")?.addEventListener("click", run);
         el("trees-style")?.addEventListener("change", show);
+
+        el("trees-season")?.addEventListener("input", event => {
+            state.month = Number(event.target.value);
+            if (el("trees-season-out")) el("trees-season-out").textContent = MONTHS[Math.floor(state.month - 1) % 12];
+            applySeason();
+        });
+
+        let growTimer = null;
+        el("trees-years")?.addEventListener("input", event => {
+            state.years = Number(event.target.value);
+            if (el("trees-years-out")) el("trees-years-out").textContent = state.years ? `+${state.years} years` : "today";
+            clearTimeout(growTimer);
+            growTimer = setTimeout(show, 120);         // rebuild (also redraws the shadows)
+        });
         el("trees-bytype")?.addEventListener("change", show);
         el("trees-opacity")?.addEventListener("input", () => {
             const mesh = state.group?.getObjectByName("swiss-tree-crowns");
@@ -916,5 +1028,5 @@
     });
 
     // for tests / other modules
-    window.swissTrees = { detectTrees, crownBlob, stemGeometry };
+    window.swissTrees = { detectTrees, crownBlob, stemGeometry, treeGeometry, growth, seasonPalette, current: () => state.result };
 })();

@@ -11,6 +11,8 @@
  *   fog       distance haze in the colour of the horizon
  *   sky       gradient + sun glow, composed under rendered images
  *   vignette  optional darkening of the image corners (renders)
+ *   focus     depth of field as tilt-shift (model-photo look): a sharp band,
+ *             increasingly blurred above and below (renders)
  *
  * Meshes use the shader pieces exported here; their uniforms are shared, so
  * changing the sun or fog updates everything at once.
@@ -50,7 +52,10 @@
         fog: false,
         fogDistance: 1500,
         sky: true,
-        vignette: false
+        vignette: false,
+        dof: false,
+        dofFocus: 0.6,          // sharp band position, 0 = top, 1 = bottom of the image
+        dofStrength: 0.5        // 0..1
     };
 
     let sunInfo = null;     // { azimuth, elevation } in degrees
@@ -220,7 +225,7 @@
 
     function shadowCasters() {
         const scene = viewer?.scene?.scene;
-        const groups = ["swiss-surfaces", "swiss-trees"].map(n => scene?.getObjectByName(n)).filter(g => g && g.visible);
+        const groups = ["swiss-surfaces", "swiss-trees", "swiss-figures"].map(n => scene?.getObjectByName(n)).filter(g => g && g.visible);
         return { scene, groups };
     }
 
@@ -357,6 +362,8 @@
 
         ctx.drawImage(image, 0, 0);
 
+        if (settings.dof) tiltShift(out);
+
         if (settings.vignette) {
             const v = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.hypot(W, H) * 0.55);
             v.addColorStop(0, "rgba(0,0,0,0)");
@@ -366,6 +373,48 @@
         }
 
         return out;
+    }
+
+    /*
+     * Tilt-shift: a horizontal sharp band around dofFocus, blur growing
+     * above and below (three blur levels, blended with soft masks).
+     */
+    function tiltShift(canvas) {
+        const W = canvas.width, H = canvas.height;
+        const ctx = canvas.getContext("2d");
+        if (!("filter" in ctx)) { console.warn("[atmosphere] canvas blur not supported - no depth of field"); return; }
+
+        const source = document.createElement("canvas");
+        source.width = W; source.height = H;
+        source.getContext("2d").drawImage(canvas, 0, 0);
+
+        const maxBlur = Math.max(2, W * 0.006 * (0.4 + 1.6 * settings.dofStrength));
+        const focus = settings.dofFocus, band = 0.12;
+
+        for (const level of [0.33, 0.66, 1]) {
+            const layer = document.createElement("canvas");
+            layer.width = W; layer.height = H;
+            const lctx = layer.getContext("2d");
+            lctx.filter = `blur(${(maxBlur * level).toFixed(1)}px)`;
+            lctx.drawImage(source, 0, 0);
+            lctx.filter = "none";
+
+            // keep this blur level only where it belongs (further from the band = stronger)
+            const inner = band + (level - 0.33) * 0.55, outer = inner + 0.2;
+            const stop = v => Math.min(1, Math.max(0, v));
+            const g = lctx.createLinearGradient(0, 0, 0, H);
+            g.addColorStop(0, "rgba(0,0,0,1)");
+            g.addColorStop(stop(focus - outer), "rgba(0,0,0,1)");
+            g.addColorStop(stop(focus - inner), "rgba(0,0,0,0)");
+            g.addColorStop(stop(focus + inner), "rgba(0,0,0,0)");
+            g.addColorStop(stop(focus + outer), "rgba(0,0,0,1)");
+            g.addColorStop(1, "rgba(0,0,0,1)");
+            lctx.globalCompositeOperation = "destination-in";
+            lctx.fillStyle = g;
+            lctx.fillRect(0, 0, W, H);
+
+            ctx.drawImage(layer, 0, 0);
+        }
     }
 
     /* ============================================================
@@ -390,6 +439,9 @@
         bindCheck("atmo-fog", "fog");
         bindCheck("atmo-sky", "sky");
         bindCheck("atmo-vignette", "vignette");
+        bindCheck("atmo-dof", "dof");
+        el("atmo-dof-focus")?.addEventListener("input", e => { settings.dofFocus = Number(e.target.value); });
+        el("atmo-dof-strength")?.addEventListener("input", e => { settings.dofStrength = Number(e.target.value); });
 
         el("atmo-date")?.addEventListener("change", e => { settings.date = e.target.value; update(); });
         el("atmo-time")?.addEventListener("input", e => {
@@ -403,7 +455,7 @@
             update();
         });
 
-        for (const [id, key] of [["atmo-sun", "sun"], ["atmo-shadows", "shadows"], ["atmo-fog", "fog"], ["atmo-sky", "sky"], ["atmo-vignette", "vignette"]]) {
+        for (const [id, key] of [["atmo-sun", "sun"], ["atmo-shadows", "shadows"], ["atmo-fog", "fog"], ["atmo-sky", "sky"], ["atmo-vignette", "vignette"], ["atmo-dof", "dof"]]) {
             if (el(id)) el(id).checked = settings[key];
         }
 

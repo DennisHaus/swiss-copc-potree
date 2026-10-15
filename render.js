@@ -244,7 +244,7 @@
             if (trees) trees.visible = withTrees;
 
             const atmosphere = window.swissAtmosphere;
-            const composeImage = atmosphere && (atmosphere.settings.sky || atmosphere.settings.vignette);
+            const composeImage = atmosphere && (atmosphere.settings.sky || atmosphere.settings.vignette || atmosphere.settings.dof);
             if (atmosphere?.settings.sky) {
                 try { viewer.setBackground("none"); } catch (error) { /* keep */ }
             }

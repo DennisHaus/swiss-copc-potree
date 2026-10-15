@@ -353,7 +353,9 @@
                         idx = t;
                     }
 
-                    for (let i = 0; i + 2 < idx.length; i++) {
+                    // every index is one corner; only whole triangles (3 corners)
+                    const corners = idx.length - (idx.length % 3);
+                    for (let i = 0; i < corners; i++) {
                         const k = idx[i] * 3;
                         out.push(...apply(m, pos[k], pos[k + 1], pos[k + 2]));
                     }
@@ -560,8 +562,9 @@
                 lv[i + 2] += dz;
             }
 
-            for (let i = 0; i < lv.length; i += 9) {
+            for (let i = 0; i + 8 < lv.length; i += 9) {
                 const cE = (lv[i] + lv[i + 3] + lv[i + 6]) / 3, cN = (lv[i + 1] + lv[i + 4] + lv[i + 7]) / 3;
+                if (!(cE === cE && cN === cN)) continue;
                 if (cE < area.minE || cE > area.maxE || cN < area.minN || cN > area.maxN) continue;
                 for (let k = 0; k < 9; k++) triangles.push(lv[i + k]);
             }

@@ -262,6 +262,43 @@
         };
     }
 
+    /*
+     * Highest building surface per cell (top view), from swissBUILDINGS3D
+     * triangles (LV95). Used for 3D prints and to keep scale figures outside.
+     */
+    function rasteriseTriangles(T, grid) {
+        const { minE, minN, cell, nx, ny } = grid;
+        const z = grid.z || (grid.z = new Float32Array(nx * ny).fill(NaN));
+
+        for (let t = 0; t + 8 < T.length; t += 9) {
+            const ax = T[t], ay = T[t + 1], az = T[t + 2];
+            const bx = T[t + 3], by = T[t + 4], bz = T[t + 5];
+            const cx = T[t + 6], cy = T[t + 7], cz = T[t + 8];
+            const det = (by - cy) * (ax - cx) + (cx - bx) * (ay - cy);
+            if (Math.abs(det) < 1e-9) continue;             // vertical wall: seen edge-on from above
+
+            const i0 = Math.max(0, Math.floor((Math.min(ax, bx, cx) - minE) / cell));
+            const i1 = Math.min(nx - 1, Math.floor((Math.max(ax, bx, cx) - minE) / cell));
+            const j0 = Math.max(0, Math.floor((Math.min(ay, by, cy) - minN) / cell));
+            const j1 = Math.min(ny - 1, Math.floor((Math.max(ay, by, cy) - minN) / cell));
+
+            for (let j = j0; j <= j1; j++) {
+                const py = minN + (j + 0.5) * cell;
+                for (let i = i0; i <= i1; i++) {
+                    const px = minE + (i + 0.5) * cell;
+                    const l1 = ((by - cy) * (px - cx) + (cx - bx) * (py - cy)) / det;
+                    const l2 = ((cy - ay) * (px - cx) + (ax - cx) * (py - cy)) / det;
+                    const l3 = 1 - l1 - l2;
+                    if (l1 < -1e-6 || l2 < -1e-6 || l3 < -1e-6) continue;
+                    const h = l1 * az + l2 * bz + l3 * cz;
+                    const k = j * nx + i;
+                    if (!(z[k] >= h)) z[k] = h;
+                }
+            }
+        }
+        return grid;
+    }
+
     /* swissBUILDINGS3D triangles (LV95) -> flat-shaded mesh relative to origin */
     function buildingMesh(triangles, origin) {
         const n = triangles.length;
@@ -681,6 +718,22 @@
             S.tileKey = key;
             S.crop = rasterCrop(SWISSIMAGE_RGB.raster, area);
 
+            // 1 m building height raster (prints, scale figures)
+            S.buildingGrid = { minE: area.minE, minN: area.minN, cell: 1,
+                nx: Math.ceil((area.maxE - area.minE)), ny: Math.ceil((area.maxN - area.minN)) };
+            if (S.sb3d) {
+                rasteriseTriangles(S.sb3d.triangles, S.buildingGrid);
+            } else {
+                const g = S.buildingGrid;
+                g.z = new Float32Array(g.nx * g.ny).fill(NaN);
+                for (let j = 0; j < S.ny; j++) for (let i = 0; i < S.nx; i++) {
+                    const h = S.roof[j * S.nx + i];
+                    if (!(h === h)) continue;
+                    const gi = Math.floor(i * S.cell), gj = Math.floor(j * S.cell);
+                    if (gi < g.nx && gj < g.ny && !(g.z[gj * g.nx + gi] >= h)) g.z[gj * g.nx + gi] = h;
+                }
+            }
+
             makeTexture(S.crop);
             state.surface = S;
             show();
@@ -742,5 +795,26 @@
         pointsHidden: () => state.hidden.length > 0
     };
 
-    window.swissSurfaces = { buildSurface, terrainMesh, roofAndWallMeshes, cleanRoofs, view };
+    /* terrain height (bilinear on the terrain grid) */
+    function terrainAt(S, e, n) {
+        const fx = (e - S.minE) / S.cell, fy = (n - S.minN) / S.cell;
+        const i = Math.max(0, Math.min(S.nx - 2, Math.floor(fx))), j = Math.max(0, Math.min(S.ny - 2, Math.floor(fy)));
+        const u = Math.min(1, Math.max(0, fx - i)), v = Math.min(1, Math.max(0, fy - j));
+        const T = S.terrain, k = j * S.nx + i;
+        return (T[k] * (1 - u) + T[k + 1] * u) * (1 - v) + (T[k + S.nx] * (1 - u) + T[k + S.nx + 1] * u) * v;
+    }
+
+    function buildingAt(S, e, n) {
+        const g = S?.buildingGrid;
+        if (!g?.z) return NaN;
+        const i = Math.floor((e - g.minE) / g.cell), j = Math.floor((n - g.minN) / g.cell);
+        return i >= 0 && j >= 0 && i < g.nx && j < g.ny ? g.z[j * g.nx + i] : NaN;
+    }
+
+    window.swissSurfaces = {
+        buildSurface, terrainMesh, roofAndWallMeshes, cleanRoofs, rasteriseTriangles, view,
+        current: () => state.surface,
+        terrainAt: (e, n) => state.surface ? terrainAt(state.surface, e, n) : NaN,
+        buildingAt: (e, n) => buildingAt(state.surface, e, n)
+    };
 })();

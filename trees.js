@@ -44,7 +44,9 @@
         group: null,
         busy: false,
         month: 7,           // season of the crowns (1..12.99)
-        years: 0            // growth: years from now
+        years: 0,           // growth: years from now
+        site: "park",       // street / park / forest: height and life expectancy
+        replant: true       // replace trees that die with young ones
     };
 
     /* ============================================================
@@ -61,6 +63,7 @@
         const n = nx * ny;
 
         const top = new Float32Array(n).fill(NaN);          // highest vegetation z
+        const bTop = new Float32Array(n).fill(NaN);         // highest building z (class 6)
 
         // LiDAR ground (fallback for the terrain)
         const groundGrid = {
@@ -105,6 +108,12 @@
                 return;
             }
 
+            if (cls === 6) {
+                const i = Math.floor(le / CHM_CELL), j = Math.floor(ln / CHM_CELL);
+                if (i < nx && j < ny && !(bTop[j * nx + i] >= z)) bTop[j * nx + i] = z;
+                return;
+            }
+
             if (cls !== VEGETATION) return;
 
             const i = Math.floor(le / CHM_CELL), j = Math.floor(ln / CHM_CELL);
@@ -146,16 +155,83 @@
             return z === z ? z : swissGroundZ(groundGrid, e, nn);
         };
 
-        // 1. canopy height model
+        // building tops: holes under rooftop vegetation (no roof points there).
+        // A gap of up to 150 m2 that is (almost) enclosed by roof is roof.
+        const roofTop = bTop.slice();
+        {
+            const seenGap = new Uint8Array(n);
+            const queue = [];
+            for (let start = 0; start < n; start++) {
+                if (roofTop[start] === roofTop[start] || seenGap[start]) continue;
+
+                const cells = [];
+                let border = false, roofEdges = 0, edges = 0;
+                const heights = [];
+                queue.length = 0;
+                queue.push(start);
+                seenGap[start] = 1;
+
+                while (queue.length) {
+                    const k = queue.pop();
+                    if (cells.length <= 600) cells.push(k);
+                    const i = k % nx, j = (k - i) / nx;
+                    if (i === 0 || j === 0 || i === nx - 1 || j === ny - 1) border = true;
+
+                    for (const [di, dj] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+                        const ii = i + di, jj = j + dj;
+                        if (ii < 0 || jj < 0 || ii >= nx || jj >= ny) continue;
+                        const q = jj * nx + ii;
+                        if (roofTop[q] === roofTop[q]) { roofEdges++; edges++; heights.push(roofTop[q]); }
+                        else {
+                            edges++;
+                            if (!seenGap[q]) { seenGap[q] = 1; queue.push(q); }
+                        }
+                    }
+                }
+
+                // filled: small, not at the edge of the area, enclosed by roof
+                // ground points inside: a courtyard, not a roof
+                let withGround = 0;
+                const g = groundGrid.ground;
+                for (const k of cells) {
+                    const i = k % nx, j = (k - i) / nx;
+                    const gi = Math.floor(i * CHM_CELL / 2), gj = Math.floor(j * CHM_CELL / 2);
+                    if (gi < g.nx && gj < g.ny && g.raw[gj * g.nx + gi] === g.raw[gj * g.nx + gi]) withGround++;
+                }
+
+                // a gap component only borders roof or the area edge: small + inside = enclosed
+                if (cells.length <= 600 && !border && roofEdges > 0 && withGround < 0.2 * cells.length) {
+                    heights.sort((a, b) => a - b);
+                    const h = heights[heights.length >> 1];
+                    for (const k of cells) roofTop[k] = h;
+                }
+            }
+        }
+
+        {
+            const grown = roofTop.slice();
+            for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+                const k = j * nx + i;
+                if (grown[k] === grown[k]) continue;
+                for (const q of [k - 1, k + 1, k - nx, k + nx]) if (roofTop[q] === roofTop[q] && !(grown[k] >= roofTop[q])) grown[k] = roofTop[q];
+            }
+            roofTop.set(grown);
+        }
+
+        // 1. canopy height model: vegetation above the terrain - or above the
+        //    roof where vegetation grows on (or just over) a building
         const chm = new Float32Array(n);
+        const base = new Float32Array(n);
         for (let j = 0; j < ny; j++) {
             for (let i = 0; i < nx; i++) {
                 const k = j * nx + i;
                 const z = top[k];
-                if (!(z === z)) continue;
                 const g = groundOf(extent.minE + (i + 0.5) * CHM_CELL, extent.minN + (j + 0.5) * CHM_CELL);
-                const h = z - g;
-                chm[k] = h > 0 && h < 120 ? h : 0;
+                const roof = roofTop[k];
+                base[k] = roof === roof && roof - g > 2 && roof < z + 0.5 ? roof : g;
+                if (!(z === z)) continue;
+                const h = z - base[k];
+                chm[k] = h > 0 && h < 60 ? h : 0;          // > 60 m: not a tree (crane, noise)
             }
         }
 
@@ -270,8 +346,9 @@
             const e = extent.minE + (i + 0.5) * CHM_CELL;
             const nn = extent.minN + (j + 0.5) * CHM_CELL;
 
+            const onRoof = base[k] - groundOf(e, nn) > 2;
             return {
-                id: idx + 1, e, n: nn, groundZ: groundOf(e, nn),
+                id: idx + 1, e, n: nn, groundZ: onRoof ? base[k] : groundOf(e, nn), onRoof,
                 height: 0, cells: 0, sumE: 0, sumN: 0, points: [],
                 sampleCells: new Set(), cellList: []
             };
@@ -300,7 +377,7 @@
             if (t.points.length >= 1200) continue;
 
             const e = extent.minE + PE[p], nn = extent.minN + PN[p];
-            const hz = PZ[p] - groundOf(e, nn);
+            const hz = PZ[p] - t.groundZ;
             if (hz > 0.5) t.points.push(e, nn, hz);
         }
 
@@ -350,8 +427,22 @@
                 }
             }
 
+            // obstacles: building height (above this tree's base) along 16 rays, every 0.5 m up to 25 m
+            const rays = new Float32Array(16 * 50);
+            for (let d = 0; d < 16; d++) {
+                const a = (d / 16) * Math.PI * 2, ca = Math.cos(a), sa = Math.sin(a);
+                for (let s2 = 0; s2 < 50; s2++) {
+                    const r = (s2 + 1) * 0.5;
+                    const ii = Math.floor((t.e + ca * r - extent.minE) / CHM_CELL), jj = Math.floor((t.n + sa * r - extent.minN) / CHM_CELL);
+                    const b = ii >= 0 && jj >= 0 && ii < nx && jj < ny ? bTop[jj * nx + ii] : NaN;
+                    rays[d * 50 + s2] = b === b ? Math.max(0, b - t.groundZ) : 0;
+                }
+            }
+
             result.push({
                 id: result.length + 1,
+                onRoof: t.onRoof,
+                rays,
                 leafType,
                 penetration,
                 edgeRatio: edge,
@@ -503,12 +594,13 @@
      */
     function stemGeometry(tree, style = "blob", centre = null) {
         const [cx, cy, cz] = centre || crownBlob(tree, style).centre;
-        const r0 = Math.min(0.45, Math.max(0.06, 0.012 * tree.height + 0.01 * tree.crownDiameter));
+        // radius from the stem diameter (DBH) when known, else from the size
+        const r0 = tree.dbh ? Math.max(0.04, tree.dbh / 2) : Math.min(0.45, Math.max(0.06, 0.012 * tree.height + 0.01 * tree.crownDiameter));
         const geometric = style === "geometric";
         const sides = geometric ? 6 : 8;
         const rings = geometric
-            ? [[0, 0, -0.2, r0 * 0.55], [0, 0, cz, r0 * 0.45]]
-            : [[0, 0, -0.2, r0], [cx * 0.5, cy * 0.5, tree.crownBase, r0 * 0.75], [cx, cy, cz, r0 * 0.45]];
+            ? [[0, 0, -0.2, r0 * 0.9], [0, 0, cz, r0 * 0.45]]
+            : [[0, 0, -0.2, r0 * 1.25], [0, 0, 1.3, r0], [cx * 0.5, cy * 0.5, tree.crownBase, r0 * 0.75], [cx, cy, cz, r0 * 0.4]];
 
         const positions = [], shade = [], faces = [];
         rings.forEach(([x, y, z, r], ringIndex) => {
@@ -527,40 +619,182 @@
         return { positions, shade, faces };
     }
 
-    /* ---------- growth over the coming years ---------- */
+    /* ---------- life of a tree: age, growth, crown development, death ---------- */
 
     /*
-     * Height approaches a typical final height (Chapman-Richards-like):
-     * young trees grow fast, old trees hardly. Crowns widen a little less
-     * than the height grows.
+     * Generic central-European model per leaf type (the species is unknown):
+     *
+     *   height     Chapman-Richards: H(t) = Hmax * (1 - e^(-k t))^p - slow
+     *              start, fast youth, plateau in old age
+     *   stem       DBH from the crown: crown diameter is about 24-27 x DBH
+     *              for healthy urban trees (Coombes et al. 2019); conifers
+     *              narrower (~18 x). Stem girth then grows ~2.5 cm per year
+     *              in open-grown broadleaves (Mitchell), slowing with age
+     *   crown      widens with the stem; its base rises as lower branches
+     *              are shed (young ~15 %, old ~45-50 % of the height); old
+     *              broadleaves get broader, flatter tops; conifers stay conical
+     *   age today  from the height while it still grows; from the stem
+     *              (girth) once the height has levelled off
+     *   death      after a life expectancy that depends strongly on the site:
+     *              street trees ~60-70 years on average, park / open trees
+     *              150-180, forest 250-300 (individual spread +-30 %);
+     *              optionally replaced by a young tree (8 years, ~4 m)
      */
-    const FINAL_HEIGHT = { needle: 38, broadleaf: 32, unknown: 34 };
+    const SPECIES = {
+        broadleaf: { hmax: 32, k: 0.030, p: 1.3, cdRatio: 25, dbhRate: 0.008, cb: [0.15, 0.45], width: 0.9 },
+        needle:    { hmax: 38, k: 0.025, p: 1.5, cdRatio: 18, dbhRate: 0.006, cb: [0.10, 0.50], width: 0.45 },
+        unknown:   { hmax: 35, k: 0.028, p: 1.4, cdRatio: 22, dbhRate: 0.007, cb: [0.12, 0.47], width: 0.7 }
+    };
+    const SITE = {
+        street: { hmax: 0.7, life: { broadleaf: 70, needle: 60, unknown: 65 } },
+        park: { hmax: 0.9, life: { broadleaf: 180, needle: 150, unknown: 165 } },
+        forest: { hmax: 1.0, life: { broadleaf: 250, needle: 300, unknown: 270 } }
+    };
 
-    function growth(tree, years) {
-        if (!years) return { sz: 1, sxy: 1 };
-        let hMax = FINAL_HEIGHT[tree.leafType] || 34;
-        if (tree.height >= 0.95 * hMax) hMax = tree.height * 1.08;
-        const h = hMax - (hMax - tree.height) * Math.exp(-0.03 * years);
-        const sz = h / tree.height;
-        return { sz, sxy: Math.pow(sz, 0.85) };
+    const hash01 = id => {
+        let h = Math.imul(id | 0, 2654435761) >>> 0;
+        h = (h ^ (h >>> 15)) >>> 0;
+        h = Math.imul(h, 2246822519) >>> 0;
+        h = (h ^ (h >>> 13)) >>> 0;
+        return h / 4294967296;                                 // always 0 .. 1
+    };
+    const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+    const cr = (sp, hmax, t) => hmax * Math.pow(1 - Math.exp(-sp.k * Math.max(0, t)), sp.p);
+
+    /* Status quo of a tree: estimated age, stem, life expectancy (cached per site). */
+    function life(tree, site) {
+        tree._life = tree._life || {};
+        if (tree._life[site]) return tree._life[site];
+
+        const sp = SPECIES[tree.leafType] || SPECIES.unknown;
+        const st = SITE[site] || SITE.park;
+        const hmax = Math.max(sp.hmax * st.hmax, tree.height / 0.92);       // tall trees: good site
+
+        const rel = Math.min(0.995, tree.height / hmax);
+        const heightAge = -Math.log(1 - Math.pow(rel, 1 / sp.p)) / sp.k;
+        const dbh = Math.max(0.04, tree.crownDiameter / sp.cdRatio);          // m
+        const stemAge = dbh / sp.dbhRate;
+        const age = rel < 0.9 ? heightAge : Math.max(heightAge, stemAge);
+
+        let lifespan = st.life[tree.leafType] * (0.7 + 0.6 * hash01(tree.id));
+        // a tree that is old today has survived so far: give it 20-80 more years
+        if (age + 20 > lifespan) lifespan = age + 20 + 60 * hash01(tree.id + 7);
+
+        return (tree._life[site] = { sp, hmax, age, dbh, lifespan, cb0: tree.crownBase / tree.height });
     }
 
-    /* Crown + stem of one tree for a style and a number of years from now. */
-    function treeGeometry(tree, style, years) {
+    /*
+     * State after `years`: { dead, height, crownBase, crownDiameter, dbh,
+     * maturity (0..1 of life), vitality (1 healthy .. 0.5 dying) } - or the
+     * replacement tree when replant is on.
+     */
+    function stateAfter(tree, years, site, replant) {
+        const L = life(tree, site), sp = L.sp;
+        const ageNow = L.age + years;
+
+        if (ageNow > L.lifespan) {
+            if (!replant) return { dead: true };
+            const a = 8 + (ageNow - L.lifespan);                                   // replacement tree
+            const hmax = sp.hmax * (SITE[site] || SITE.park).hmax;
+            const height = Math.max(4, cr(sp, hmax, a));
+            const dbh = sp.dbhRate * a;
+            const crownDiameter = Math.max(1.2, Math.min(sp.cdRatio * dbh, sp.width * height + 1));
+            const m = a / ((SITE[site] || SITE.park).life[tree.leafType] || 150);
+            return {
+                replanted: true, dead: false, age: a, height, dbh, crownDiameter,
+                crownBase: height * (sp.cb[0] + (sp.cb[1] - sp.cb[0]) * Math.min(1, m)),
+                maturity: m, vitality: 1
+            };
+        }
+
+        // height: the increment of the growth curve, never shrinking
+        const height = Math.min(L.hmax, tree.height + Math.max(0, cr(sp, L.hmax, ageNow) - cr(sp, L.hmax, L.age)));
+
+        // stem: steady girth growth, slower in old age
+        const m0 = L.age / L.lifespan, m = ageNow / L.lifespan;
+        const dbh = L.dbh + sp.dbhRate * years * (1 - 0.5 * Math.min(1, (m0 + m) / 2));
+
+        // crown width follows the stem, limited by the typical crown shape
+        const crownDiameter = Math.max(tree.crownDiameter, Math.min(sp.cdRatio * dbh, sp.width * height + 2));
+
+        // crown base rises with maturity
+        const cbRel = (mm) => sp.cb[0] + (sp.cb[1] - sp.cb[0]) * Math.min(1, mm);
+        const crownBase = height * clamp(L.cb0 + cbRel(m) - cbRel(m0), 0.05, 0.65);
+
+        const vitality = m > 0.85 ? 1 - 0.5 * clamp((m - 0.85) / 0.15, 0, 1) : 1;
+        return { dead: false, age: ageNow, height, dbh, crownDiameter, crownBase, maturity: m, vitality };
+    }
+
+    /* Highest free horizontal distance in a direction at a height (buildings). */
+    function freeDistance(tree, angle, heightAboveBase) {
+        if (!tree.rays) return Infinity;
+        const f = (((angle / (Math.PI * 2)) % 1) + 1) % 1 * 16;
+        let free = Infinity;
+        // both neighbouring rays: the crown must not slip past a building corner
+        for (const d of [Math.floor(f) % 16, Math.ceil(f) % 16]) {
+            for (let s2 = 0; s2 < 50; s2++) {
+                if (tree.rays[d * 50 + s2] > heightAboveBase - 0.3) { free = Math.min(free, Math.max(0.4, (s2 + 1) * 0.5 - 0.6)); break; }
+            }
+        }
+        return free;
+    }
+
+    /*
+     * Crown + stem of one tree for a style, years from now and a site.
+     * Returns null when the tree has died (and is not replaced).
+     */
+    function treeGeometry(tree, style, years, site = "park", replant = true) {
+        const S = stateAfter(tree, years, site, replant);
+        if (S.dead) return null;
+
         tree._crowns = tree._crowns || {};
-        const crown = tree._crowns[style] || (tree._crowns[style] = crownBlob(tree, style));
-        const { sz, sxy } = growth(tree, years);
+        let crown;
+
+        if (S.replanted) {
+            // young replacement: a generic crown of its own size
+            const young = { id: tree.id + 100000, e: tree.e, n: tree.n, height: S.height, crownBase: S.crownBase, crownDiameter: S.crownDiameter, points: [] };
+            crown = crownBlob(young, style);
+        } else {
+            crown = tree._crowns[style] || (tree._crowns[style] = crownBlob(tree, style));
+        }
+
+        // measured crown -> state after `years`
+        const H0 = S.replanted ? S.height : tree.height, CB0 = S.replanted ? S.crownBase : tree.crownBase;
+        const CD0 = S.replanted ? S.crownDiameter : tree.crownDiameter;
+        const sz = (S.height - S.crownBase) / Math.max(0.5, H0 - CB0);
+        const sxy = S.crownDiameter / Math.max(0.5, CD0);
+
+        // old broadleaves: broader, flatter tops
+        const flat = tree.leafType === "needle" ? 0 : 0.3 * clamp((S.maturity - 0.6) / 0.4, 0, 1);
+        const mid = (S.height + S.crownBase) / 2;
 
         const positions = crown.positions.slice();
         for (let p = 0; p < positions.length; p += 3) {
-            positions[p] *= sxy; positions[p + 1] *= sxy; positions[p + 2] *= sz;
+            let x = positions[p] * sxy, y = positions[p + 1] * sxy;
+            let z = S.crownBase + (positions[p + 2] - CB0) * sz;
+
+            if (flat && z > mid) {
+                const t = (z - mid) / Math.max(0.5, S.height - mid);
+                z = mid + (z - mid) * (1 - flat);
+                x *= 1 + flat * 0.4 * t; y *= 1 + flat * 0.4 * t;
+            }
+
+            // never into buildings: shorten towards the stem where a building
+            // reaches higher than this part of the crown
+            const r = Math.hypot(x, y);
+            if (r > 0.3) {
+                const free = freeDistance(tree, Math.atan2(y, x), z);
+                if (r > free) { x *= free / r; y *= free / r; }
+            }
+
+            positions[p] = x; positions[p + 1] = y; positions[p + 2] = z;
         }
 
-        const grown = { ...tree, height: tree.height * sz, crownBase: tree.crownBase * sz, crownDiameter: tree.crownDiameter * sxy };
-        const [cx, cy, cz] = crown.centre;
-        const stem = stemGeometry(grown, style, [cx * sxy, cy * sxy, cz * sz]);
+        const [cx, cy] = crown.centre;
+        const centre = [cx * sxy, cy * sxy, mid];
+        const stem = stemGeometry({ ...tree, height: S.height, crownBase: S.crownBase, crownDiameter: S.crownDiameter, dbh: S.dbh }, style, centre);
 
-        return { crown: { positions, shade: crown.shade, faces: crown.faces }, stem, height: grown.height };
+        return { crown: { positions, shade: crown.shade, faces: crown.faces }, stem, state: S, height: S.height };
     }
 
     /* ---------- seasons (broadleaf only; conifers stay green) ---------- */
@@ -612,6 +846,8 @@
         ${ATMO.vertexDecl}
         attribute float aShade;
         attribute float aType;      // 0 broadleaf, 0.5 unknown, 1 needle
+        attribute float aVital;     // 1 healthy .. 0.5 dying (thinner crown)
+        varying float vVital;
         varying vec3 vNormal;
         varying vec3 vView;
         varying float vShade;
@@ -620,6 +856,7 @@
 
         void main() {
             vType = aType;
+            vVital = aVital;
             ${ATMO.vertexMain}
             vec4 mv = modelViewMatrix * vec4(position, 1.0);
             vNormal = normalize(normalMatrix * normal);
@@ -647,6 +884,7 @@
         varying vec3 vView;
         varying float vShade;
         varying float vType;
+        varying float vVital;
         varying vec3 vLight;
 
         void main() {
@@ -668,7 +906,7 @@
                     high = mix(uBroadHigh, uNeedleHigh, 0.5);
                     alpha = mix(uBroadAlpha, 1.0, 0.5);
                 }
-                alpha *= uOpacity * mix(0.75 + 0.25 * soft, 0.12 + 0.88 * soft, uSoftEdge);
+                alpha *= uOpacity * vVital * mix(0.75 + 0.25 * soft, 0.12 + 0.88 * soft, uSoftEdge);
             }
 
             vec3 colour = atmoShade(mix(low, high, vShade) * (0.8 + 0.2 * light));
@@ -741,10 +979,13 @@
         group.position.set(origin[0] + ox, origin[1] + oy, origin[2]);
 
         const typeValue = { broadleaf: 0, unknown: 0.5, needle: 1 };
-        const parts = { stem: { positions: [], shade: [], type: [], index: [] }, crown: { positions: [], shade: [], type: [], index: [] } };
+        const parts = { stem: { positions: [], shade: [], type: [], vital: [], index: [] }, crown: { positions: [], shade: [], type: [], vital: [], index: [] } };
+        const counts = { alive: 0, dead: 0, replanted: 0 };
 
         for (const t of trees) {
-            const geo = treeGeometry(t, style, years);
+            const geo = treeGeometry(t, style, years, state.site, state.replant);
+            if (!geo) { counts.dead++; continue; }
+            if (geo.state.replanted) counts.replanted++; else counts.alive++;
             const x0 = t.e - origin[0], y0 = t.n - origin[1], z0 = t.groundZ - origin[2];
 
             for (const [name, part] of [["stem", geo.stem], ["crown", geo.crown]]) {
@@ -753,6 +994,7 @@
                 for (let p = 0; p < part.positions.length; p += 3) {
                     target.positions.push(part.positions[p] + x0, part.positions[p + 1] + y0, part.positions[p + 2] + z0);
                     target.type.push(name === "crown" ? (typeValue[t.leafType] ?? 0.5) : 0.5);
+                    target.vital.push(name === "crown" ? geo.state.vitality : 1);
                 }
                 target.shade.push(...part.shade);
                 for (const [a, b, c] of part.faces) target.index.push(a + offset, b + offset, c + offset);
@@ -760,19 +1002,25 @@
         }
 
         for (const name of ["stem", "crown"]) {
-            let { positions, shade, type, index } = parts[name];
+            let { positions, shade, type, vital, index } = parts[name];
+            if (!positions.length) continue;
             const g = new THREE.BufferGeometry();
 
             if (style === "geometric") {
+                const flatVital = [];
+                for (let i = 0; i < index.length; i++) flatVital.push(vital[index[i]]);
                 ({ positions, shade, type } = flatten(positions, shade, type, index));
+                vital = flatVital;
                 setAttr(g, "position", new THREE.Float32BufferAttribute(positions, 3));
                 setAttr(g, "aShade", new THREE.Float32BufferAttribute(shade, 1));
                 setAttr(g, "aType", new THREE.Float32BufferAttribute(type, 1));
+                setAttr(g, "aVital", new THREE.Float32BufferAttribute(vital, 1));
                 g.computeVertexNormals();      // non-indexed: one normal per facet
             } else {
                 setAttr(g, "position", new THREE.Float32BufferAttribute(positions, 3));
                 setAttr(g, "aShade", new THREE.Float32BufferAttribute(shade, 1));
                 setAttr(g, "aType", new THREE.Float32BufferAttribute(type, 1));
+                setAttr(g, "aVital", new THREE.Float32BufferAttribute(vital, 1));
                 g.setIndex(index);
                 g.computeVertexNormals();
             }
@@ -783,6 +1031,7 @@
             group.add(mesh);
         }
 
+        group.userData.counts = counts;
         return group;
     }
 
@@ -817,6 +1066,13 @@
         state.group.traverse(o => { if (o.isMesh) ATMO.attach(o); });
         viewer.scene.scene.add(state.group);
         ATMO.invalidate();
+
+        const c = state.group.userData.counts;
+        if (el("trees-years-out")) {
+            el("trees-years-out").textContent = state.years
+                ? `+${state.years} years` + (c.dead || c.replanted ? ` (${c.dead + c.replanted} reached their life expectancy${c.replanted ? `, ${c.replanted} replanted` : ""})` : "")
+                : "today";
+        }
     }
 
     /* ============================================================
@@ -853,11 +1109,12 @@
         const style = (el("trees-style")?.value || "blob") === "geometric" ? "geometric" : "blob";
 
         for (const t of trees) {
-            const geo = treeGeometry(t, style, state.years);
+            const geo = treeGeometry(t, style, state.years, state.site, state.replant);
+            if (!geo) continue;
             const x0 = t.e - origin[0], y0 = t.n - origin[1], z0 = t.groundZ - origin[2];
 
             lines.push(`o tree_${String(t.id).padStart(4, "0")}_${t.leafType}_h${geo.height.toFixed(1)}m` +
-                (state.years ? `_in${state.years}y` : ""));
+                (state.years ? `_in${state.years}y` : "") + (geo.state.replanted ? "_replanted" : ""));
 
             for (const part of [geo.crown, geo.stem]) {
                 for (let p = 0; p < part.positions.length; p += 3) {
@@ -872,11 +1129,17 @@
     }
 
     function exportCsv() {
-        const rows = ["id;E_LV95;N_LV95;ground_z;height_m;crown_base_m;crown_diameter_m;crown_area_m2;leaf_type_estimated;laser_penetration"];
+        const rows = ["id;E_LV95;N_LV95;ground_z;on_roof;height_m;crown_base_m;crown_diameter_m;crown_area_m2;" +
+            "leaf_type_estimated;laser_penetration;age_estimated_y;dbh_estimated_cm;life_expectancy_y;site_type" +
+            (state.years ? `;height_in_${state.years}y;status_in_${state.years}y` : "")];
         for (const t of state.result.trees) {
-            rows.push([t.id, t.e.toFixed(2), t.n.toFixed(2), t.groundZ.toFixed(2), t.height.toFixed(2),
+            const L = life(t, state.site);
+            const later = state.years ? stateAfter(t, state.years, state.site, state.replant) : null;
+            rows.push([t.id, t.e.toFixed(2), t.n.toFixed(2), t.groundZ.toFixed(2), t.onRoof ? 1 : 0, t.height.toFixed(2),
                 t.crownBase.toFixed(2), t.crownDiameter.toFixed(2), t.crownArea.toFixed(1),
-                t.leafType, t.penetration.toFixed(2)].join(";"));
+                t.leafType, t.penetration.toFixed(2), Math.round(L.age), Math.round(L.dbh * 100), Math.round(L.lifespan), state.site,
+                ...(later ? [later.dead ? "" : later.height.toFixed(1), later.dead ? "dead" : later.replanted ? "replanted" : "alive"] : [])
+            ].join(";"));
         }
         download(`${baseName()}.csv`, rows.join("\n"), "text/csv");
     }
@@ -943,13 +1206,7 @@
                 extent,
                 key,
                 minHeight,
-                groundAt: (e, n) => {
-                    const alti = SWISS_ALTI.data;
-                    if (!alti || SWISS_ALTI.key !== key) return NaN;
-                    const i = Math.floor((e - alti.originE) * alti.invRes);
-                    const j = Math.floor((alti.originN - n) * alti.invRes);
-                    return i >= 0 && j >= 0 && i < alti.width && j < alti.height ? alti.z[j * alti.width + i] : NaN;
-                },
+                groundAt: (e, n) => swissAltiAt(e, n, key),
                 onProgress: (done, total) => {
                     showSwissImageProgress(done, total, "Reading points…");
                 }
@@ -995,10 +1252,12 @@
             applySeason();
         });
 
+        el("trees-site")?.addEventListener("change", event => { state.site = event.target.value; show(); });
+        el("trees-replant")?.addEventListener("change", event => { state.replant = event.target.checked; show(); });
+
         let growTimer = null;
         el("trees-years")?.addEventListener("input", event => {
             state.years = Number(event.target.value);
-            if (el("trees-years-out")) el("trees-years-out").textContent = state.years ? `+${state.years} years` : "today";
             clearTimeout(growTimer);
             growTimer = setTimeout(show, 120);         // rebuild (also redraws the shadows)
         });
@@ -1028,5 +1287,5 @@
     });
 
     // for tests / other modules
-    window.swissTrees = { detectTrees, crownBlob, stemGeometry, treeGeometry, growth, seasonPalette, current: () => state.result };
+    window.swissTrees = { detectTrees, crownBlob, stemGeometry, treeGeometry, life, stateAfter, seasonPalette, current: () => state.result };
 })();

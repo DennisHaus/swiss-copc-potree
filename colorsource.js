@@ -668,6 +668,96 @@ async function swissFindAltiHref(tile) {
     return best;
 }
 
+/* ---------- swissALTI3D over any area (up to a few km tiles) ---------- */
+
+const SWISS_ALTI_TILES = new Map();     // "2600-1200@2" -> Promise<raster | null>
+
+/* One swissALTI3D km tile (gsd 0.5 or 2 m), newest year; null if none. */
+function swissLoadAltiKm(kmE, kmN, gsd) {
+    const key = `${kmE}-${kmN}@${gsd}`;
+    if (SWISS_ALTI_TILES.has(key)) return SWISS_ALTI_TILES.get(key);
+
+    const promise = (async () => {
+        const [lon, lat] = proj4("EPSG:2056", "EPSG:4326", [kmE * 1000 + 500, kmN * 1000 + 500]);
+        const d = 0.0005;
+        const url = new URL(`${CONFIG.STAC_ROOT}/collections/${SWISS_ALTI.collection}/items`);
+        url.searchParams.set("bbox", [lon - d, lat - d, lon + d, lat + d].join(","));
+        url.searchParams.set("limit", "100");
+
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`swissALTI3D STAC request failed (${response.status})`);
+        const data = await response.json();
+
+        let best = null;
+        for (const item of data.features || []) {
+            if (!String(item.id || "").includes(`${kmE}-${kmN}`)) continue;
+            const year = swissItemYear(item);
+            for (const asset of Object.values(item.assets || {})) {
+                const href = asset?.href || "";
+                if (!/\.tiff?($|\?)/i.test(href)) continue;
+                const g = Number(asset["gsd"] ?? asset["eo:gsd"]) || (/_0\.5_/.test(href) ? 0.5 : /_2_/.test(href) ? 2 : 0);
+                if (g !== gsd) continue;
+                if (!best || year > best.year) best = { href, year };
+            }
+        }
+        if (!best) return null;
+
+        const tiff = await GeoTIFF.fromUrl(best.href);
+        const image = await tiff.getImage(0);
+        const [left, , right, top] = image.getBoundingBox();
+        const width = image.getWidth(), height = image.getHeight();
+        const raw = await image.readRasters({ samples: [0], interleave: true });
+        const z = raw instanceof Float32Array ? raw : Float32Array.from(raw);
+        const noValue = image.getGDALNoData();
+        if (noValue !== null && noValue !== undefined) for (let i = 0; i < z.length; i++) if (z[i] === noValue) z[i] = NaN;
+
+        const res = (right - left) / width;
+        return { z, width, height, originE: left, originN: top, invRes: 1 / res, res, year: best.year };
+    })().catch(error => { SWISS_ALTI_TILES.delete(key); throw error; });
+
+    SWISS_ALTI_TILES.set(key, promise);
+    return promise;
+}
+
+/*
+ * Terrain sampler for an LV95 area that may cover several km tiles.
+ * Returns { at(e, n), tiles, missing }.
+ */
+async function swissLoadAltiArea(area, gsd = 2, onProgress) {
+    const tiles = [];
+    for (let kn = Math.floor(area.minN / 1000); kn <= Math.floor((area.maxN - 1e-6) / 1000); kn++) {
+        for (let ke = Math.floor(area.minE / 1000); ke <= Math.floor((area.maxE - 1e-6) / 1000); ke++) tiles.push([ke, kn]);
+    }
+    if (tiles.length > 9) throw new Error("area too large (max. 3 × 3 km)");
+
+    const rasters = new Map();
+    let missing = 0, done = 0;
+    for (const [ke, kn] of tiles) {
+        onProgress?.(`Loading terrain ${++done}/${tiles.length}…`);
+        const r = await swissLoadAltiKm(ke, kn, gsd);
+        if (r) rasters.set(`${ke}-${kn}`, r); else missing++;
+    }
+
+    const sample = (r, e, n) => {
+        const fx = (e - r.originE) * r.invRes - 0.5, fy = (r.originN - n) * r.invRes - 0.5;
+        const x = Math.min(r.width - 1, Math.max(0, fx)), y = Math.min(r.height - 1, Math.max(0, fy));
+        const i = Math.min(r.width - 2, Math.floor(x)), j = Math.min(r.height - 2, Math.floor(y));
+        const u = x - i, v = y - j, w = r.width, k = j * w + i, Z = r.z;
+        const a = Z[k], b = Z[k + 1], c = Z[k + w], d = Z[k + w + 1];
+        if (a === a && b === b && c === c && d === d) return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+        const near = Z[Math.round(y) * w + Math.round(x)];
+        return near === near ? near : NaN;
+    };
+
+    return {
+        tiles: tiles.length, missing,
+        at(e, n) {
+            const r = rasters.get(`${Math.floor(e / 1000)}-${Math.floor(n / 1000)}`);
+            return r ? sample(r, e, n) : NaN;
+        }
+    };
+}
+
 /* Load the terrain of the current tile (once per tile; never throws). */
 function swissEnsureAlti() {
     const key = currentTile ? tileKey(currentTile, 0) : "";
@@ -1152,6 +1242,31 @@ function swissGroundRefresh(grids, force = false) {
     if (force || !ground.filled || performance.now() - ground.filledAt > 500) {
         swissGroundFill(ground);
     }
+}
+
+/*
+ * swissALTI3D height at (e, n): bilinear, clamped to the raster edge (points
+ * up to two pixels outside take the edge value). NaN if no terrain loaded
+ * for this tile or the point is clearly outside.
+ */
+function swissAltiAt(e, n, key = null) {
+    const alti = SWISS_ALTI.data;
+    if (!alti || (key !== null && SWISS_ALTI.key !== key)) return NaN;
+
+    const fx = (e - alti.originE) * alti.invRes - 0.5;
+    const fy = (alti.originN - n) * alti.invRes - 0.5;
+    if (fx < -2 || fy < -2 || fx > alti.width + 1 || fy > alti.height + 1) return NaN;
+
+    const x = Math.min(alti.width - 1, Math.max(0, fx)), y = Math.min(alti.height - 1, Math.max(0, fy));
+    const i = Math.min(alti.width - 2, Math.floor(x)), j = Math.min(alti.height - 2, Math.floor(y));
+    const u = x - i, v = y - j, w = alti.width, Z = alti.z, k = j * w + i;
+
+    const a = Z[k], b = Z[k + 1], c = Z[k + w], d = Z[k + w + 1];
+    if (a === a && b === b && c === c && d === d) {
+        return (a * (1 - u) + b * u) * (1 - v) + (c * (1 - u) + d * u) * v;
+    }
+    const near = Z[Math.round(y) * w + Math.round(x)];
+    return near === near ? near : NaN;
 }
 
 function swissGroundZ(grids, e, n) {

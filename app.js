@@ -1651,10 +1651,12 @@ function createSection(type) {
             Math.max(size.z * 0.02, minimumThickness)
         );
     } else {
+        // thin in x (thickness), long in y: long enough to cut the whole
+        // tile at any orientation
         volume.scale.set(
-            Math.max(size.x * 0.02, minimumThickness),
-            Math.max(size.y, minimumThickness),
-            Math.max(size.z, minimumThickness)
+            Math.max(Math.min(size.x * 0.02, 5), minimumThickness),
+            Math.hypot(size.x, size.y) * 1.05,
+            Math.max(size.z * 1.2, minimumThickness)
         );
     }
 
@@ -1663,6 +1665,20 @@ function createSection(type) {
         bounds.center.y,
         bounds.center.z
     );
+
+    // vertical sections start through the point the camera looks at
+    let anchor = bounds.center.clone();
+    if (type === "vertical") {
+        try {
+            const pivot = viewer.scene.view.getPivot();
+            if (pivot && Number.isFinite(pivot.x)) {
+                anchor.x = Math.min(bounds.max.x, Math.max(bounds.min.x, pivot.x));
+                anchor.y = Math.min(bounds.max.y, Math.max(bounds.min.y, pivot.y));
+                volume.position.x = anchor.x;
+                volume.position.y = anchor.y;
+            }
+        } catch (error) { /* centre */ }
+    }
 
     viewer.scene.addVolume(volume);
 
@@ -1680,7 +1696,10 @@ function createSection(type) {
     currentSection = {
         type,
         volume,
-        bounds
+        bounds,
+        anchor,             // vertical: the section turns about this point
+        angle: 0,           // vertical: orientation in degrees (0 = cut along north-south)
+        offset: 0           // vertical: shift across the section plane, m
     };
 
     createSectionControls();
@@ -1753,10 +1772,9 @@ function createSectionControls() {
             >
         `;
     } else {
-        const min = bounds.min.x;
-        const max = bounds.max.x;
-        const value =
-            currentSection.volume.position.x;
+        const reach = Math.hypot(bounds.size.x, bounds.size.y) / 2;
+        const step = Math.max(reach / 1000, 0.01);
+        const thickness = currentSection.volume.scale.x;
 
         controls.innerHTML = `
             <div class="section-type">
@@ -1764,36 +1782,22 @@ function createSectionControls() {
             </div>
 
             <label>
-                Position X
-                <span id="section-position-value">
-                    ${value.toFixed(2)} m
-                </span>
+                Orientation
+                <span id="section-angle-value">${currentSection.angle.toFixed(0)}°</span>
             </label>
+            <input id="section-angle" type="range" min="0" max="180" step="1" value="${currentSection.angle}">
 
-            <input
-                id="section-position"
-                type="range"
-                min="${min}"
-                max="${max}"
-                step="${Math.max((max - min) / 1000, 0.01)}"
-                value="${value}"
-            >
+            <label>
+                Position (across the cut)
+                <span id="section-position-value">${currentSection.offset.toFixed(2)} m</span>
+            </label>
+            <input id="section-position" type="range" min="${-reach}" max="${reach}" step="${step}" value="${currentSection.offset}">
 
             <label>
                 Thickness
-                <span id="section-thickness-value">
-                    ${currentSection.volume.scale.x.toFixed(2)} m
-                </span>
+                <span id="section-thickness-value">${thickness.toFixed(2)} m</span>
             </label>
-
-            <input
-                id="section-thickness"
-                type="range"
-                min="${Math.max((max - min) / 1000, 0.01)}"
-                max="${Math.max((max - min) * 0.25, 0.1)}"
-                step="${Math.max((max - min) / 1000, 0.01)}"
-                value="${currentSection.volume.scale.x}"
-            >
+            <input id="section-thickness" type="range" min="0.1" max="${Math.max(20, reach * 0.25)}" step="0.1" value="${thickness}">
         `;
     }
 
@@ -1806,6 +1810,11 @@ function createSectionControls() {
     );
 
     getEl("section-thickness")?.addEventListener(
+        "input",
+        updateSectionFromControls
+    );
+
+    getEl("section-angle")?.addEventListener(
         "input",
         updateSectionFromControls
     );
@@ -1839,8 +1848,16 @@ function updateSectionFromControls() {
         volume.position.z = position;
         volume.scale.z = thickness;
     } else {
-        volume.position.x = position;
+        // turn about the anchor, then shift across the cut
+        const angle = Number(getEl("section-angle")?.value || 0);
+        const a = angle * Math.PI / 180;
+        currentSection.angle = angle;
+        currentSection.offset = position;
+        volume.rotation.z = a;
+        volume.position.x = currentSection.anchor.x + Math.cos(a) * position;
+        volume.position.y = currentSection.anchor.y + Math.sin(a) * position;
         volume.scale.x = thickness;
+        volume.updateMatrixWorld(true);
     }
 
     updateSectionInfo();
@@ -1860,11 +1877,14 @@ function updateSectionInfo() {
     const thicknessValue =
         getEl("section-thickness-value");
 
+    const angleValue = getEl("section-angle-value");
+    if (angleValue) angleValue.textContent = `${currentSection.angle.toFixed(0)}°`;
+
     if (positionValue) {
         const value =
             currentSection.type === "horizontal"
                 ? volume.position.z
-                : volume.position.x;
+                : currentSection.offset;
 
         positionValue.textContent =
             `${value.toFixed(2)} m`;

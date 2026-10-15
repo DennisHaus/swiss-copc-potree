@@ -490,6 +490,50 @@
         }
     }
 
+    /*
+     * Vertical offset (ellipsoidal heights of the tiles -> terrain heights).
+     *
+     * Per triangle its lowest corner: d = terrain - height. The building feet
+     * sit on the terrain, so d piles up at the offset; roofs give smaller
+     * values, and feet on slopes (swissBUILDINGS3D reaches down to the
+     * lowest terrain point of a building) give larger ones. The most common
+     * value (0.1 m histogram) is therefore the offset - not a percentile,
+     * which slopes and foundations would bias.
+     */
+    function heightOffset(tiles, terrainAt) {
+        const d = [];
+        for (const lv of tiles) {
+            for (let i = 0; i + 8 < lv.length; i += 9) {
+                let k = i;
+                if (lv[i + 5] < lv[k + 2]) k = i + 3;
+                if (lv[i + 8] < lv[k + 2]) k = i + 6;
+                const t = terrainAt(lv[k], lv[k + 1]);
+                if (t === t) d.push(t - lv[k + 2]);
+            }
+        }
+        if (!d.length) return { value: 0, samples: 0 };
+
+        d.sort((a, b) => a - b);
+        const median = d[d.length >> 1];
+        const lo = median - 40, bins = new Uint32Array(800);
+        for (const v of d) {
+            const b = Math.floor((v - lo) / 0.1);
+            if (b >= 0 && b < bins.length) bins[b]++;
+        }
+
+        // smoothed peak (3 bins), then refine with the values around it
+        let best = 0, bestCount = -1;
+        for (let b = 1; b < bins.length - 1; b++) {
+            const c = bins[b - 1] + 2 * bins[b] + bins[b + 1];
+            if (c > bestCount) { bestCount = c; best = b; }
+        }
+        const peak = lo + (best + 0.5) * 0.1;
+        const near = d.filter(v => Math.abs(v - peak) <= 0.3);
+        const value = near.length ? near[near.length >> 1] : peak;
+
+        return { value, samples: d.length, support: near.length / d.length };
+    }
+
     /* ============================================================
        Public: buildings over an LV95 area
        ============================================================ */
@@ -505,6 +549,7 @@
         if (!contents.length) throw new Error("no swissBUILDINGS3D tiles for this area");
 
         const triangles = [];
+        const tiles = [];
         let failed = 0, done = 0, lastError = null;
 
         for (const content of contents) {
@@ -530,43 +575,34 @@
                 continue;
             }
 
-            // glTF frame -> Earth-centred -> WGS84 -> LV95
+            // glTF frame -> Earth-centred -> WGS84 -> LV95 (height still ellipsoidal)
             let m = content.upAxis === "Z" ? IDENTITY : Y_UP_TO_Z_UP;
             if (local.rtc) m = mul([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, local.rtc[0], local.rtc[1], local.rtc[2], 1], m);
             m = mul(content.transform, m);
 
             const P = local.positions;
             const lv = new Float64Array(P.length);
-            const offsets = [];
 
             for (let i = 0; i < P.length; i += 3) {
                 const [x, y, z] = apply(m, P[i], P[i + 1], P[i + 2]);
                 const [lon, lat, h] = ecefToGeodetic(x, y, z);
                 const [E, N] = proj4("EPSG:4326", "EPSG:2056", [lon, lat]);
                 lv[i] = E; lv[i + 1] = N; lv[i + 2] = h;
-
-                if (i % 9 === 0) {          // one vertex per triangle is enough
-                    const t = terrainAt(E, N);
-                    if (t === t) offsets.push(t - h);
-                }
             }
 
-            // building feet sit on the terrain: the high end of (terrain - height)
-            // is the vertical datum offset (ellipsoid / geoid), the rest are roofs
-            offsets.sort((a, b) => a - b);
-            const dz = offsets.length ? offsets[Math.floor(offsets.length * 0.85)] : 0;
+            tiles.push(lv);
+        }
 
-            for (let i = 0; i < lv.length; i += 3) {
-                const E = lv[i], N = lv[i + 1];
-                // keep only triangles over the area (with a little margin)
-                lv[i + 2] += dz;
-            }
+        // ONE height offset for the whole area (ellipsoid -> LN02), so that
+        // neighbouring buildings from different tiles agree
+        const offset = heightOffset(tiles, terrainAt);
 
+        for (const lv of tiles) {
             for (let i = 0; i + 8 < lv.length; i += 9) {
                 const cE = (lv[i] + lv[i + 3] + lv[i + 6]) / 3, cN = (lv[i + 1] + lv[i + 4] + lv[i + 7]) / 3;
                 if (!(cE === cE && cN === cN)) continue;
                 if (cE < area.minE || cE > area.maxE || cN < area.minN || cN > area.maxN) continue;
-                for (let k = 0; k < 9; k++) triangles.push(lv[i + k]);
+                for (let k = 0; k < 9; k++) triangles.push(k % 3 === 2 ? lv[i + k] + offset.value : lv[i + k]);
             }
         }
 
@@ -574,12 +610,12 @@
             throw new Error(`swissBUILDINGS3D tiles could not be read${lastError ? ` (${lastError.message})` : ""}`);
         }
 
-        return { triangles: Float64Array.from(triangles), tiles: contents.length, failed };
+        return { triangles: Float64Array.from(triangles), tiles: contents.length, failed, offset };
     }
 
     window.swissBuildings3D = {
         loadBuildings,
         // for tests
-        _internal: { geodeticToEcef, ecefToGeodetic, parseB3dm, parseGlb, gltfTriangles, decodeDraco, mul, apply, Y_UP_TO_Z_UP, collectContents }
+        _internal: { heightOffset, geodeticToEcef, ecefToGeodetic, parseB3dm, parseGlb, gltfTriangles, decodeDraco, mul, apply, Y_UP_TO_Z_UP, collectContents }
     };
 })();

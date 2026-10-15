@@ -13,6 +13,8 @@
  *   vignette  optional darkening of the image corners (renders)
  *   focus     depth of field as tilt-shift (model-photo look): a sharp band,
  *             increasingly blurred above and below (renders)
+ *   section   the active section box (app.js) also cuts surfaces, crowns
+ *             and figures, not only the points
  *
  * Meshes use the shader pieces exported here; their uniforms are shared, so
  * changing the sun or fog updates everything at once.
@@ -66,6 +68,8 @@
 
     const vertexDecl = `
         uniform mat4 uShadowMatrix;
+        uniform mat4 uSectionMatrix;
+        varying vec3 vSection;
         varying vec3 vAtmoNormal;
         varying float vAtmoDist;
         varying vec4 vAtmoShadow;
@@ -76,6 +80,7 @@
         vAtmoNormal = normal;
         vAtmoDist = length((modelViewMatrix * vec4(position, 1.0)).xyz);
         vAtmoShadow = uShadowMatrix * vec4(position, 1.0);
+        vSection = (uSectionMatrix * vec4(position, 1.0)).xyz;
     `;
 
     const fragmentDecl = `
@@ -88,6 +93,8 @@
         uniform sampler2D uShadowMap;
         uniform float uShadowOn;
         uniform float uShadowTexel;
+        uniform float uSectionOn;
+        varying vec3 vSection;
         varying vec3 vAtmoNormal;
         varying float vAtmoDist;
         varying vec4 vAtmoShadow;
@@ -113,6 +120,8 @@
 
         // albedo -> lit, shadowed, hazy colour
         vec3 atmoShade(vec3 albedo) {
+            // outside the section box: cut away
+            if (uSectionOn > 0.5 && (abs(vSection.x) > 0.5 || abs(vSection.y) > 0.5 || abs(vSection.z) > 0.5)) discard;
             vec3 n = normalize(vAtmoNormal);
             if (!gl_FrontFacing) n = -n;
             float diffuse = max(dot(n, uSunDir), 0.0);
@@ -124,7 +133,12 @@
 
     /* Uniforms for a new material: shared ones + its own shadow matrix. */
     function uniforms() {
-        return { ...shared, uShadowMatrix: { value: new THREE.Matrix4() } };
+        return {
+            ...shared,
+            uShadowMatrix: { value: new THREE.Matrix4() },
+            uSectionMatrix: { value: new THREE.Matrix4() },
+            uSectionOn: { value: 0 }
+        };
     }
 
     /* ============================================================
@@ -230,10 +244,25 @@
     }
 
     /* Every mesh sets its own shadow matrix right before it is drawn. */
+    const sectionInverse = new THREE.Matrix4();
+
     function attach(mesh) {
         mesh.onBeforeRender = function (renderer, scene, camera, geometry, material) {
-            const u = material?.uniforms?.uShadowMatrix;
-            if (u) u.value.multiplyMatrices(shadowViewProj, this.matrixWorld);
+            const u = material?.uniforms;
+            if (!u?.uShadowMatrix) return;
+            u.uShadowMatrix.value.multiplyMatrices(shadowViewProj, this.matrixWorld);
+
+            // section box of app.js: world -> unit box (-0.5 .. 0.5)
+            const volume = typeof currentSection !== "undefined" ? currentSection?.volume : null;
+            if (volume && u.uSectionMatrix) {
+                volume.updateMatrixWorld(true);
+                if (typeof sectionInverse.invert === "function") sectionInverse.copy(volume.matrixWorld).invert();
+                else sectionInverse.getInverse(volume.matrixWorld);
+                u.uSectionMatrix.value.multiplyMatrices(sectionInverse, this.matrixWorld);
+                u.uSectionOn.value = 1;
+            } else if (u.uSectionOn) {
+                u.uSectionOn.value = 0;
+            }
         };
     }
 

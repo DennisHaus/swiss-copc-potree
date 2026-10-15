@@ -91,13 +91,38 @@
                 const e = area.minE + i * cell, nn = area.minN + j * cell;
                 let z = terrainAt(e, nn);
                 if (!(z === z)) z = swissGroundZ(groundGrid, e, nn);
-                terrain[j * nx + i] = z === z ? z : 0;
+                terrain[j * nx + i] = z;      // NaN: filled below
             }
         }
+
+        // gaps (e.g. right at the tile edge): nearest valid neighbour, never 0
+        fillGaps(terrain, nx, ny);
 
         cleanRoofs(roof, terrain, nx, ny);
 
         return { nx, ny, cell, minE: area.minE, minN: area.minN, terrain, roof, built };
+    }
+
+    /* Fill NaN cells with the nearest valid value (two-pass propagation). */
+    function fillGaps(z, nx, ny) {
+        let missing = 0;
+        for (let k = 0; k < z.length; k++) if (!(z[k] === z[k])) missing++;
+        if (!missing || missing === z.length) { if (missing) z.fill(0); return; }
+
+        const dist = new Float32Array(z.length);
+        for (let k = 0; k < z.length; k++) dist[k] = z[k] === z[k] ? 0 : Infinity;
+        const relax = (k, m) => { if (dist[m] + 1 < dist[k]) { dist[k] = dist[m] + 1; z[k] = z[m]; } };
+
+        for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+            const k = j * nx + i;
+            if (i > 0) relax(k, k - 1);
+            if (j > 0) relax(k, k - nx);
+        }
+        for (let j = ny - 1; j >= 0; j--) for (let i = nx - 1; i >= 0; i--) {
+            const k = j * nx + i;
+            if (i < nx - 1) relax(k, k + 1);
+            if (j < ny - 1) relax(k, k + nx);
+        }
     }
 
     /* Drop low/isolated built cells, close small holes in roofs. */
@@ -300,9 +325,11 @@
     }
 
     /* swissBUILDINGS3D triangles (LV95) -> flat-shaded mesh relative to origin */
-    function buildingMesh(triangles, origin) {
+    function buildingMesh(triangles, origin, marked = null) {
         const n = triangles.length;
         const positions = new Float32Array(n), normals = new Float32Array(n);
+        const flag = new Float32Array(n / 3);
+        if (marked) for (const t of marked) flag[t / 3] = flag[t / 3 + 1] = flag[t / 3 + 2] = 1;
 
         for (let i = 0; i < n; i += 9) {
             for (let k = 0; k < 9; k += 3) {
@@ -318,7 +345,48 @@
             for (let k = 0; k < 9; k += 3) { normals[i + k] = nx; normals[i + k + 1] = ny; normals[i + k + 2] = nz; }
         }
 
-        return { positions, normals };
+        return { positions, normals, flag };
+    }
+
+    /*
+     * swissBUILDINGS3D roofs vs LiDAR (highest building point per cell):
+     * common offset (median) and the share of roof area that differs by
+     * more than 1 m after correcting it. Marks those triangles.
+     */
+    function compareWithLidar(S, T) {
+        const diffs = [], tris = [];
+
+        for (let t = 0; t + 8 < T.length; t += 9) {
+            const ax = T[t + 3] - T[t], ay = T[t + 4] - T[t + 1], az = T[t + 5] - T[t + 2];
+            const bx = T[t + 6] - T[t], by = T[t + 7] - T[t + 1], bz = T[t + 8] - T[t + 2];
+            const nx = ay * bz - az * by, ny = az * bx - ax * bz, nz = ax * by - ay * bx;
+            const len = Math.hypot(nx, ny, nz);
+            if (!len || Math.abs(nz / len) < 0.3) continue;            // walls
+
+            const e = (T[t] + T[t + 3] + T[t + 6]) / 3, n = (T[t + 1] + T[t + 4] + T[t + 7]) / 3, z = (T[t + 2] + T[t + 5] + T[t + 8]) / 3;
+            const i = Math.round((e - S.minE) / S.cell), j = Math.round((n - S.minN) / S.cell);
+            if (i < 0 || j < 0 || i >= S.nx || j >= S.ny) continue;
+            const lidar = S.roof[j * S.nx + i];
+            if (!(lidar === lidar)) continue;
+
+            diffs.push(lidar - z);
+            tris.push(t, Math.abs(nz) / 2);                           // area in plan
+        }
+
+        if (!diffs.length) return { shift: 0, compared: 0, offShare: 0, marked: new Set() };
+
+        const sorted = diffs.filter(d => Math.abs(d) < 5).sort((a, b) => a - b);
+        const shift = sorted.length ? sorted[sorted.length >> 1] : 0;
+
+        let area = 0, offArea = 0;
+        const marked = new Set();
+        for (let k = 0; k < diffs.length; k++) {
+            const a = tris[2 * k + 1];
+            area += a;
+            if (Math.abs(diffs[k] - shift) > 1) { offArea += a; marked.add(tris[2 * k]); }
+        }
+
+        return { shift, compared: diffs.length, offShare: area ? offArea / area : 0, marked };
     }
 
     /* ============================================================
@@ -373,11 +441,14 @@
 
     const VERTEX = `
         uniform vec4 uMap;          // (origin - texture left, texture top - origin, 1/width m, 1/height m)
+        attribute float aFlag;
         varying vec2 vUv;
         varying float vUp;
+        varying float vFlag;
         ${ATMO.vertexDecl}
 
         void main() {
+            vFlag = aFlag;
             vUv = vec2((position.x + uMap.x) * uMap.z, (uMap.y - position.y) * uMap.w);
             vUp = normal.z;
             ${ATMO.vertexMain}
@@ -393,6 +464,7 @@
         uniform float uSplit;       // 1: faces pointing up are roofs, the rest walls
         varying vec2 vUv;
         varying float vUp;
+        varying float vFlag;
         ${ATMO.fragmentDecl}
 
         void main() {
@@ -401,6 +473,7 @@
             if (roof && uUseTex > 0.5 && vUv.x >= 0.0 && vUv.x <= 1.0 && vUv.y >= 0.0 && vUv.y <= 1.0) {
                 base = texture2D(uTex, vUv).rgb;
             }
+            if (vFlag > 0.5) base = mix(base, vec3(0.86, 0.22, 0.18), 0.75);   // differs from LiDAR
             gl_FragColor = vec4(atmoShade(base), 1.0);
         }
     `;
@@ -485,6 +558,7 @@
             const g = new THREE.BufferGeometry();
             setAttr(g, "position", new THREE.BufferAttribute(B.positions, 3));
             setAttr(g, "normal", new THREE.BufferAttribute(B.normals, 3));
+            setAttr(g, "aFlag", new THREE.BufferAttribute(el("surf-mark-diff")?.checked ? B.flag : new Float32Array(B.flag.length), 1));
             group.add(new THREE.Mesh(g, material(colours.wall, S.crop, useTex, S.origin, colours.roof)));
         } else {
             addMesh(S.meshes.roof, colours.roof, useTex);
@@ -663,13 +737,7 @@
             const extent = swissTileExtentLV95(0);
             const area = modelArea(extent, cell);
 
-            const terrainAt = (e, n) => {
-                const alti = SWISS_ALTI.data;
-                if (!alti || SWISS_ALTI.key !== key) return NaN;
-                const i = Math.floor((e - alti.originE) * alti.invRes);
-                const j = Math.floor((alti.originN - n) * alti.invRes);
-                return i >= 0 && j >= 0 && i < alti.width && j < alti.height ? alti.z[j * alti.width + i] : NaN;
-            };
+            const terrainAt = (e, n) => swissAltiAt(e, n, key);
 
             const wantSb3d = (el("surf-buildings")?.value || "sb3d") === "sb3d";
             const haveAlti = !!SWISS_ALTI.data && SWISS_ALTI.key === key;
@@ -689,8 +757,9 @@
                 }
             }
 
-            const readPoints = !sb3d || !haveAlti;
-            if (readPoints) setInfo(sb3d ? "Reading ground points (no swissALTI3D)…" : "Reading building points…");
+            const checkLidar = !!sb3d && el("surf-check-lidar")?.checked !== false;
+            const readPoints = !sb3d || !haveAlti || checkLidar;
+            if (readPoints) setInfo(checkLidar ? "Reading LiDAR building points to check heights…" : sb3d ? "Reading ground points (no swissALTI3D)…" : "Reading building points…");
 
             const S = await buildSurface({
                 forEachPoint: readPoints ? window.swissTilePoints.forEach : async () => 0,
@@ -701,6 +770,14 @@
             S.sb3d = sb3d;
             S.sb3dNote = sb3dNote;
 
+            if (sb3d && checkLidar) {
+                S.check = compareWithLidar(S, sb3d.triangles);
+                if (Math.abs(S.check.shift) >= 0.1) {
+                    const T = sb3d.triangles;
+                    for (let i = 2; i < T.length; i += 3) T[i] += S.check.shift;
+                }
+            }
+
             const origin = [
                 Math.round((area.minE + area.maxE) / 2 / 100) * 100,
                 Math.round((area.minN + area.maxN) / 2 / 100) * 100,
@@ -708,7 +785,7 @@
             ];
 
             if (S.sb3d) {
-                S.meshes = { terrain: terrainMesh(S, origin), buildings: buildingMesh(S.sb3d.triangles, origin) };
+                S.meshes = { terrain: terrainMesh(S, origin), buildings: buildingMesh(S.sb3d.triangles, origin, S.check?.marked) };
             } else {
                 const roofWalls = roofAndWallMeshes(S, origin);
                 S.meshes = { terrain: terrainMesh(S, origin), roof: roofWalls.roof, walls: roofWalls.walls };
@@ -745,6 +822,8 @@
                 `${Math.round((area.maxE - area.minE))} × ${Math.round(area.maxN - area.minN)} m, terrain ${cell} m; ` +
                 `buildings: ${S.sb3d ? "swissBUILDINGS3D" : "from LiDAR"} (${Math.round(buildingTriangles).toLocaleString()} triangles)` +
                 (S.sb3dNote ? ` – ${S.sb3dNote}` : "") +
+                (S.check ? `; LiDAR check: common offset ${S.check.shift >= 0 ? "+" : ""}${S.check.shift.toFixed(2)} m corrected, ` +
+                    `${Math.round(S.check.offShare * 100)} % of the roof area differs by > 1 m (${S.check.compared.toLocaleString()} roof faces compared)` : "") +
                 (S.crop ? `, texture ${S.crop.width} × ${S.crop.height} px` : ", no raster texture (colour the tile with an LV95 raster first)") +
                 ` [${Math.round((performance.now() - t0) / 1000)} s].`
             );
@@ -771,6 +850,7 @@
         el("surf-build")?.addEventListener("click", run);
         el("surf-clear")?.addEventListener("click", clear);
         el("surf-style")?.addEventListener("change", show);
+        el("surf-mark-diff")?.addEventListener("change", show);
         el("surf-hide-points")?.addEventListener("change", event => {
             setPointsHidden(false);
             if (state.group) setPointsHidden(event.target.checked);
@@ -812,7 +892,7 @@
     }
 
     window.swissSurfaces = {
-        buildSurface, terrainMesh, roofAndWallMeshes, cleanRoofs, rasteriseTriangles, view,
+        buildSurface, terrainMesh, roofAndWallMeshes, cleanRoofs, rasteriseTriangles, fillGaps, compareWithLidar, view,
         current: () => state.surface,
         terrainAt: (e, n) => state.surface ? terrainAt(state.surface, e, n) : NaN,
         buildingAt: (e, n) => buildingAt(state.surface, e, n)

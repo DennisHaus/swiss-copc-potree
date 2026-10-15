@@ -292,6 +292,13 @@
                     <input id="trees-season" type="range" min="1" max="12.9" step="0.1" value="7">
                     <label for="trees-years">Growth <output id="trees-years-out">today</output></label>
                     <input id="trees-years" type="range" min="0" max="100" step="5" value="0">
+                    <label for="trees-site" class="control-label">Site (height and life expectancy)</label>
+                    <select id="trees-site">
+                        <option value="street">Street trees (~60–70 years)</option>
+                        <option value="park" selected>Park / open ground (~150–180 years)</option>
+                        <option value="forest">Forest (~250–300 years)</option>
+                    </select>
+                    <label><input id="trees-replant" type="checkbox" checked> Replace trees that die with young trees</label>
                     <label for="trees-opacity">Crown opacity</label>
                     <input id="trees-opacity" type="range" min="0.1" max="1" step="0.05" value="0.6">
                 </div>
@@ -317,6 +324,8 @@
                         <option value="sb3d" selected>swissBUILDINGS3D (clean roofs and walls)</option>
                         <option value="lidar">From the LiDAR points</option>
                     </select>
+                    <label><input id="surf-check-lidar" type="checkbox" checked> Check building heights against LiDAR (slower)</label>
+                    <label><input id="surf-mark-diff" type="checkbox"> Mark roofs that differ from LiDAR by &gt; 1 m (red)</label>
                     <label for="surf-style" class="control-label">Look</label>
                     <select id="surf-style">
                         <option value="white" selected>White massing model</option>
@@ -365,7 +374,20 @@
                         <option value="500" selected>Medium (500)</option>
                         <option value="800">Fine (800, large file)</option>
                     </select>
-                    <div id="print-info" class="section-info">Build surfaces first – the print uses the same area.</div>
+                    <span class="control-label">Print area (LV95, max. 2000 × 2000 m – may cross tile borders)</span>
+                    <label>Centre E <input id="print-ce" type="number" step="10"></label>
+                    <label>Centre N <input id="print-cn" type="number" step="10"></label>
+                    <label>Width m <input id="print-w" type="number" min="50" max="2000" step="50" value="1000"></label>
+                    <label>Height m <input id="print-h" type="number" min="50" max="2000" step="50" value="1000"></label>
+                    <div class="print-move">
+                        <button type="button" data-print-move="0,100">↑ 100 m</button>
+                        <button type="button" data-print-move="-100,0">← 100 m</button>
+                        <button type="button" data-print-move="100,0">→ 100 m</button>
+                        <button type="button" data-print-move="0,-100">↓ 100 m</button>
+                        <button id="print-here" type="button">Centre on view</button>
+                    </div>
+                    <label><input id="print-show" type="checkbox" checked> Show the print area (frame in 3D, drag it on the map)</label>
+                    <div id="print-info" class="section-info">Load a tile to place the print area.</div>
                     <span class="control-label">Terrain</span>
                     <button id="print-terrain-pos" type="button">Positive</button>
                     <button id="print-terrain-neg" type="button">Negative mould</button>
@@ -373,8 +395,9 @@
                     <button id="print-all-pos" type="button">Positive</button>
                     <button id="print-all-neg" type="button">Negative mould</button>
                     <div class="section-info">
-                        Closed solids in millimetres. The mould is mirrored and has a rim: pour into it and
-                        turn the cast over. Roof overhangs become vertical (printable without supports).
+                        Closed solids in millimetres from swissALTI3D and swissBUILDINGS3D, loaded for the print
+                        area itself. The mould is mirrored and has a rim: pour into it and turn the cast over.
+                        Roof overhangs become vertical (printable without supports).
                     </div>
                 </div>
             </div>
@@ -531,6 +554,19 @@
         </details>
 
         <details class="fold" open>
+            <summary>Navigation</summary>
+            <div class="fold-body">
+                <div class="ctrl">
+                    <button id="nav-projection" type="button">Perspective ✓ (O)</button>
+                    <div class="section-info">
+                        W A S D move · E up · C down · ← → turn · ↑ ↓ tilt · Shift faster ·
+                        O orthographic / perspective. Mouse navigation works as before.
+                    </div>
+                </div>
+            </div>
+        </details>
+
+        <details class="fold" open>
             <summary>Sections</summary>
             <div class="fold-body">
                 <div class="section-buttons">
@@ -538,7 +574,7 @@
                     <button id="vertical-section-button" type="button" disabled>Vertical</button>
                     <button id="clear-section-button" type="button" disabled>Clear</button>
                 </div>
-                <div id="section-info" class="section-info">Load a point cloud to create sections.</div>
+                <div id="section-info" class="section-info">Load a point cloud to create sections. They also cut the surfaces, trees and figures.</div>
             </div>
         </details>
 
@@ -659,6 +695,7 @@
 <script src="./figures.js"></script>
 <script src="./print.js"></script>
 <script src="./render.js"></script>
+<script src="./nav.js"></script>
 <script src="./counter.js"></script>
 
 </body>

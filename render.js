@@ -146,7 +146,8 @@
             undo.push(() => window.applyAppearance?.());
         }
 
-        if (style.background) {
+        // with a sky, the background stays transparent (the sky is composed later)
+        if (style.background && !window.swissAtmosphere?.settings.sky) {
             try { viewer.setBackground(style.background); } catch (error) { /* keep */ }
             undo.push(() => window.reapplyViewerSettings?.());
         }
@@ -242,6 +243,12 @@
             }
             if (trees) trees.visible = withTrees;
 
+            const atmosphere = window.swissAtmosphere;
+            const composeImage = atmosphere && (atmosphere.settings.sky || atmosphere.settings.vignette);
+            if (atmosphere?.settings.sky) {
+                try { viewer.setBackground("none"); } catch (error) { /* keep */ }
+            }
+
             // enlarge the drawing, keep it on screen as a scaled preview
             const ratio = canvas.width / Math.max(1, area.clientWidth);
             const applySize = (w, h) => {
@@ -272,7 +279,8 @@
                 try {
                     await waitForDetail(width, height, label);
                     overlay(`${label}: saving…`);
-                    const image = await captureNextFrame();
+                    let image = await captureNextFrame();
+                    if (composeImage) image = atmosphere.compose(image, viewer.scene.getActiveCamera?.());
                     await saveCanvas(image, STYLES[key].label);
                     saved.push(`${STYLES[key].label} (${image.width} × ${image.height})`);
                 } finally {

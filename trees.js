@@ -532,7 +532,10 @@
        THREE.JS DISPLAY
        ============================================================ */
 
+    const ATMO = window.swissAtmosphere;
+
     const BLOB_VERTEX = `
+        ${ATMO.vertexDecl}
         attribute float aShade;
         attribute float aType;      // 0 broadleaf, 0.5 unknown, 1 needle
         varying vec3 vNormal;
@@ -543,6 +546,7 @@
 
         void main() {
             vType = aType;
+            ${ATMO.vertexMain}
             vec4 mv = modelViewMatrix * vec4(position, 1.0);
             vNormal = normalize(normalMatrix * normal);
             vView = normalize(-mv.xyz);
@@ -557,6 +561,7 @@
         uniform vec3 uLow;
         uniform vec3 uHigh;
         uniform float uByType;      // 1: colour by leaf type
+        ${ATMO.fragmentDecl}
         varying vec3 vNormal;
         varying vec3 vView;
         varying float vShade;
@@ -577,7 +582,7 @@
                 low = vType < 0.25 ? bLow : (vType > 0.75 ? nLow : uLow);
                 high = vType < 0.25 ? bHigh : (vType > 0.75 ? nHigh : uHigh);
             }
-            vec3 colour = mix(low, high, vShade) * light;
+            vec3 colour = atmoShade(mix(low, high, vShade) * (0.8 + 0.2 * light));
             gl_FragColor = vec4(colour, uOpacity * (0.12 + 0.88 * soft));
         }
     `;
@@ -632,6 +637,7 @@
 
             const mesh = new THREE.Mesh(g, new THREE.ShaderMaterial({
                 uniforms: {
+                    ...ATMO.uniforms(),
                     uByType: { value: 0 },
                     uOpacity: { value: 1 },
                     uLow: { value: new THREE.Color(0x4a3a2c) },
@@ -645,23 +651,7 @@
             group.add(mesh);
         }
 
-        if (style === "circle") {
-            const ring = [];
-            for (const t of trees) {
-                const x = t.centroidE - origin[0], y = t.centroidN - origin[1];
-                const z = t.groundZ - origin[2] + t.height - 0.35 * (t.height - t.crownBase);
-                const r = t.crownDiameter / 2;
-                for (let s = 0; s < 32; s++) {
-                    const a0 = (s / 32) * Math.PI * 2, a1 = ((s + 1) / 32) * Math.PI * 2;
-                    ring.push(x + r * Math.cos(a0), y + r * Math.sin(a0), z, x + r * Math.cos(a1), y + r * Math.sin(a1), z);
-                }
-            }
-            const g = new THREE.BufferGeometry();
-            setAttr(g, "position", new THREE.Float32BufferAttribute(ring, 3));
-            group.add(new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0x3f7f3a })));
-        }
-
-        if (style === "blob") {
+        if (style !== "none") {
             const positions = [], shade = [], index = [], type = [];
             const typeValue = { broadleaf: 0, unknown: 0.5, needle: 1 };
 
@@ -687,6 +677,7 @@
 
             const material = new THREE.ShaderMaterial({
                 uniforms: {
+                    ...ATMO.uniforms(),
                     uByType: { value: el("trees-bytype")?.checked !== false ? 1 : 0 },
                     uOpacity: { value: opacity },
                     uLow: { value: new THREE.Color(0x2f5d34) },
@@ -722,7 +713,9 @@
 
         const opacity = Number(el("trees-opacity")?.value ?? 0.6);
         state.group = buildGroup(state.result, style, opacity);
+        state.group.traverse(o => { if (o.isMesh) ATMO.attach(o); });
         viewer.scene.scene.add(state.group);
+        ATMO.invalidate();
     }
 
     /* ============================================================

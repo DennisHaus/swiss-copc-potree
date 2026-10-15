@@ -7,7 +7,8 @@
  *   1. walk the tileset (explicit tree or implicit tiling) down to the leaf
  *      tiles over the requested LV95 area
  *   2. read each .b3dm: feature table (RTC_CENTER) + glTF 1.0 or 2.0 with
- *      plain or quantized positions (Draco is reported as unsupported)
+ *      plain, quantized or Draco-compressed geometry (swisstopo's building
+ *      tiles are Draco-compressed; Google's decoder is loaded on demand)
  *   3. Earth-centred coordinates -> WGS84 -> LV95 (proj4, already loaded)
  *   4. heights: aligned to the terrain (swissALTI3D) per tile, which also
  *      removes any ellipsoid / geoid difference
@@ -98,6 +99,89 @@
 
     // glTF is Y-up, 3D Tiles is Z-up: (x, y, z) -> (x, -z, y)
     const Y_UP_TO_Z_UP = [1, 0, 0, 0, 0, 0, 1, 0, 0, -1, 0, 0, 0, 0, 0, 1];
+
+    /* ============================================================
+       Draco decoder (loaded on demand)
+       ============================================================ */
+
+    const DRACO_SOURCES = [
+        "https://www.gstatic.com/draco/versioned/decoders/1.5.6/draco_decoder.js",
+        "https://cdn.jsdelivr.net/npm/draco3d@1.5.6/draco_decoder.js"
+    ];
+
+    let dracoPromise = null;
+
+    function loadScript(src) {
+        return new Promise((resolve, reject) => {
+            const script = document.createElement("script");
+            script.src = src;
+            script.onload = resolve;
+            script.onerror = () => reject(new Error(`could not load ${src}`));
+            document.head.appendChild(script);
+        });
+    }
+
+    function ensureDraco() {
+        if (!dracoPromise) {
+            dracoPromise = (async () => {
+                if (typeof DracoDecoderModule !== "function") {
+                    let lastError = null;
+                    for (const src of DRACO_SOURCES) {
+                        try { await loadScript(src); if (typeof DracoDecoderModule === "function") break; }
+                        catch (error) { lastError = error; }
+                    }
+                    if (typeof DracoDecoderModule !== "function") {
+                        throw lastError || new Error("Draco decoder not available");
+                    }
+                }
+                return await new Promise(resolve => {
+                    const module = DracoDecoderModule({ onModuleLoaded: m => resolve(m) });
+                    if (module && typeof module.then === "function") module.then(resolve);
+                });
+            })().catch(error => { dracoPromise = null; throw error; });
+        }
+        return dracoPromise;
+    }
+
+    /* Draco primitive -> { positions: Float32Array, index: Uint32Array } */
+    function decodeDraco(draco, bytes, positionId) {
+        const decoder = new draco.Decoder();
+        const array = new Int8Array(bytes);
+        let geometry = null;
+
+        try {
+            const type = decoder.GetEncodedGeometryType(array);
+            if (type !== draco.TRIANGULAR_MESH) throw new Error("Draco data is not a triangle mesh");
+
+            geometry = new draco.Mesh();
+            const status = decoder.DecodeArrayToMesh(array, array.byteLength, geometry);
+            if (!status.ok() || geometry.ptr === 0) throw new Error(`Draco decoding failed: ${status.error_msg()}`);
+
+            const attribute = positionId !== undefined
+                ? decoder.GetAttributeByUniqueId(geometry, positionId)
+                : decoder.GetAttribute(geometry, decoder.GetAttributeId(geometry, draco.POSITION));
+
+            const points = geometry.num_points();
+            const components = attribute.num_components();
+            const posBytes = points * components * 4;
+            let ptr = draco._malloc(posBytes);
+            decoder.GetAttributeDataArrayForAllPoints(geometry, attribute, draco.DT_FLOAT32, posBytes, ptr);
+            const positions = new Float32Array(draco.HEAPF32.buffer, ptr, points * components).slice();
+            draco._free(ptr);
+
+            const faces = geometry.num_faces();
+            const indexBytes = faces * 3 * 4;
+            ptr = draco._malloc(indexBytes);
+            decoder.GetTrianglesUInt32Array(geometry, indexBytes, ptr);
+            const index = new Uint32Array(draco.HEAPF32.buffer, ptr, faces * 3).slice();
+            draco._free(ptr);
+
+            return { positions, index, components };
+        } finally {
+            if (geometry) draco.destroy(geometry);
+            draco.destroy(decoder);
+        }
+    }
 
     /* ============================================================
        b3dm + glTF
@@ -225,12 +309,8 @@
     }
 
     /* All triangles of a glTF, in the glTF's own frame (node transforms applied). */
-    function gltfTriangles(gltf) {
+    function gltfTriangles(gltf, draco = null) {
         const json = gltf.json;
-
-        if (json.extensionsUsed?.includes("KHR_draco_mesh_compression")) {
-            throw new Error("the tiles are Draco-compressed (not supported yet)");
-        }
 
         const out = [];
         const meshOf = node => gltf.version === 1 ? (node.meshes || []) : (node.mesh !== undefined ? [node.mesh] : []);
@@ -244,9 +324,24 @@
                     const mode = prim.mode === undefined ? 4 : prim.mode;
                     if (mode !== 4 && mode !== 5 && mode !== 6) continue;
 
-                    const pos = readAccessor(gltf, prim.attributes.POSITION);
-                    const count = pos.length / 3;
-                    let idx = prim.indices !== undefined ? readAccessor(gltf, prim.indices) : Float64Array.from({ length: count }, (_, i) => i);
+                    let pos, idx;
+                    const dracoExt = prim.extensions?.KHR_draco_mesh_compression;
+
+                    if (dracoExt) {
+                        if (!draco) throw new Error("Draco decoder missing");
+                        const view = json.bufferViews[dracoExt.bufferView];
+                        const data = bufferData(gltf, view.buffer);
+                        const bytes = data.slice(view.byteOffset || 0, (view.byteOffset || 0) + view.byteLength);
+                        const decoded = decodeDraco(draco, bytes, dracoExt.attributes?.POSITION);
+                        if (decoded.components !== 3) continue;
+                        pos = decoded.positions;
+                        idx = decoded.index;
+                    } else {
+                        pos = readAccessor(gltf, prim.attributes.POSITION);
+                        idx = prim.indices !== undefined
+                            ? readAccessor(gltf, prim.indices)
+                            : Float64Array.from({ length: pos.length / 3 }, (_, i) => i);
+                    }
 
                     if (mode === 5) {   // strip
                         const t = [];
@@ -421,12 +516,15 @@
 
                 const b3dm = parseB3dm(buffer);
                 const gltf = parseGlb(b3dm.glb);
-                local = gltfTriangles(gltf);
+                const needsDraco = (gltf.json.extensionsUsed || []).includes("KHR_draco_mesh_compression");
+                if (needsDraco) onProgress?.(`Loading buildings ${done}/${contents.length} (decoding)…`);
+                local = gltfTriangles(gltf, needsDraco ? await ensureDraco() : null);
                 local.rtc = b3dm.rtc || local.rtc;
             } catch (error) {
                 failed++;
                 lastError = error;
-                if (/Draco/.test(error.message)) throw error;
+                console.warn("[buildings3d]", content.url, error);
+                if (/could not load|not available/.test(error.message)) throw error;   // decoder missing: stop
                 continue;
             }
 
@@ -479,6 +577,6 @@
     window.swissBuildings3D = {
         loadBuildings,
         // for tests
-        _internal: { geodeticToEcef, ecefToGeodetic, parseB3dm, parseGlb, gltfTriangles, mul, apply, Y_UP_TO_Z_UP, collectContents }
+        _internal: { geodeticToEcef, ecefToGeodetic, parseB3dm, parseGlb, gltfTriangles, decodeDraco, mul, apply, Y_UP_TO_Z_UP, collectContents }
     };
 })();

@@ -284,7 +284,6 @@
                     <label for="trees-style" class="control-label">Crowns</label>
                     <select id="trees-style">
                         <option value="blob">Soft volume</option>
-                        <option value="circle">Crown circle</option>
                         <option value="none">Hidden</option>
                     </select>
                     <label><input id="trees-bytype" type="checkbox" checked> Colour by leaf type (estimated: needle blue-green, broadleaf yellow-green)</label>
@@ -326,6 +325,29 @@
                         points). Vegetation, cars and poles are left out (trees: see above).
                     </div>
                     <button id="surf-obj" type="button" disabled>Rhino (OBJ + texture)</button>
+                </div>
+            </div>
+        </details>
+
+        <details class="fold" open>
+            <summary>Light &amp; atmosphere</summary>
+            <div class="fold-body">
+                <div class="ctrl">
+                    <label><input id="atmo-sun" type="checkbox" checked> Sun from date and time</label>
+                    <input id="atmo-date" type="date">
+                    <label for="atmo-time">Time <output id="atmo-time-out">15:00</output></label>
+                    <input id="atmo-time" type="range" min="5" max="21.5" step="0.25" value="15">
+                    <div id="atmo-sun-info" class="section-info"></div>
+                    <label><input id="atmo-shadows" type="checkbox" checked> Shadows (buildings and crowns)</label>
+                    <label><input id="atmo-fog" type="checkbox"> Distance fog</label>
+                    <label for="atmo-fogdist">Fog distance <output id="atmo-fogdist-out">1500 m</output></label>
+                    <input id="atmo-fogdist" type="range" min="200" max="6000" step="100" value="1500">
+                    <label><input id="atmo-sky" type="checkbox" checked> Sky in rendered images</label>
+                    <label><input id="atmo-vignette" type="checkbox"> Vignette in rendered images</label>
+                    <div class="section-info">
+                        Sun, shadows and fog act on the surfaces and tree crowns, live in the viewer and in
+                        the renders. Points are not shaded.
+                    </div>
                 </div>
             </div>
         </details>
@@ -558,6 +580,7 @@
 <script src="./laz.js"></script>
 <script src="./ui.js"></script>
 <script src="./export.js"></script>
+<script src="./atmosphere.js"></script>
 <script src="./trees.js"></script>
 <script src="./buildings3d.js"></script>
 <script src="./surfaces.js"></script>

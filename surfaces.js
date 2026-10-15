@@ -332,18 +332,18 @@
        DISPLAY
        ============================================================ */
 
+    const ATMO = window.swissAtmosphere;
+
     const VERTEX = `
         uniform vec4 uMap;          // (origin - texture left, texture top - origin, 1/width m, 1/height m)
         varying vec2 vUv;
-        varying vec3 vNormal;
-        varying vec3 vLight;
         varying float vUp;
+        ${ATMO.vertexDecl}
 
         void main() {
             vUv = vec2((position.x + uMap.x) * uMap.z, (uMap.y - position.y) * uMap.w);
             vUp = normal.z;
-            vNormal = normalize(normalMatrix * normal);
-            vLight = normalize((viewMatrix * vec4(0.35, -0.25, 1.0, 0.0)).xyz);
+            ${ATMO.vertexMain}
             gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
         }
     `;
@@ -355,9 +355,8 @@
         uniform vec3 uRoofColor;
         uniform float uSplit;       // 1: faces pointing up are roofs, the rest walls
         varying vec2 vUv;
-        varying vec3 vNormal;
-        varying vec3 vLight;
         varying float vUp;
+        ${ATMO.fragmentDecl}
 
         void main() {
             bool roof = uSplit < 0.5 || abs(vUp) > 0.3;
@@ -365,8 +364,7 @@
             if (roof && uUseTex > 0.5 && vUv.x >= 0.0 && vUv.x <= 1.0 && vUv.y >= 0.0 && vUv.y <= 1.0) {
                 base = texture2D(uTex, vUv).rgb;
             }
-            float light = 0.62 + 0.38 * max(dot(normalize(vNormal), vLight), 0.0);
-            gl_FragColor = vec4(base * light, 1.0);
+            gl_FragColor = vec4(atmoShade(base), 1.0);
         }
     `;
 
@@ -394,6 +392,7 @@
     function material(colour, crop, useTex, origin, roofColour = null) {
         return new THREE.ShaderMaterial({
             uniforms: {
+                ...ATMO.uniforms(),
                 uTex: { value: state.texture },
                 uUseTex: { value: useTex && state.texture ? 1 : 0 },
                 uColor: { value: new THREE.Color(colour) },
@@ -455,9 +454,11 @@
             addMesh(S.meshes.walls, colours.wall, false, S.meshes.walls.normals);
         }
 
+        group.traverse(o => { if (o.isMesh) ATMO.attach(o); });
         state.group = group;
         viewer.scene.scene.add(group);
         setPointsHidden(el("surf-hide-points")?.checked !== false);
+        ATMO.invalidate();
     }
 
     function setPointsHidden(hidden) {

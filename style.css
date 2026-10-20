@@ -498,3 +498,12 @@ output { float: right; color: #c4c4c4; font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) {
     * { transition: none !important; }
 }
+
+/* Parcels */
+#parcels-results { margin: 6px 0 8px; max-height: 160px; overflow-y: auto; }
+#parcels-results:empty { display: none; }
+#parcels-list { max-height: 200px; overflow-y: auto; margin-bottom: 10px; border-top: 1px solid var(--line); }
+#parcels-list:empty { display: none; }
+.parcels-row { display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 5px 2px; border-bottom: 1px solid var(--line); font-size: 12px; cursor: pointer; }
+.parcels-row:hover { background: var(--field); }
+.parcels-row span { overflow-wrap: anywhere; }

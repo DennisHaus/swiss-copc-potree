@@ -311,6 +311,51 @@
         </details>
 
         <details class="fold" open>
+            <summary>Parcels <span id="parcels-count" class="badge">0</span></summary>
+            <div class="fold-body">
+                <div class="ctrl">
+                    <div class="search-row">
+                        <input id="parcels-search" type="text" placeholder="Parcel (e.g. Köniz 1234) or address" autocomplete="off">
+                        <button id="parcels-search-button" type="button">Find</button>
+                    </div>
+                    <div id="parcels-results"></div>
+                    <button id="parcels-pick" type="button">Pick a parcel on the map</button>
+                </div>
+                <div class="ctrl two">
+                    <button id="parcels-tile" type="button" disabled>All in this tile</button>
+                    <button id="parcels-view" type="button">All in map view</button>
+                </div>
+                <div class="ctrl">
+                    <label><input id="parcels-proj" type="checkbox"> Include projected parcels (in mutation)</label>
+                    <label><input id="parcels-sdr" type="checkbox"> Include building rights (SDR)</label>
+                    <label><input id="parcels-show-map" type="checkbox" checked> Show on map</label>
+                    <label><input id="parcels-show-3d" type="checkbox" checked> Show in 3D (on swissALTI3D)</label>
+                </div>
+                <div id="parcels-list"></div>
+                <div class="ctrl two">
+                    <button id="parcels-select-all" type="button" disabled>Select all</button>
+                    <button id="parcels-select-none" type="button" disabled>Select none</button>
+                </div>
+                <div class="ctrl">
+                    <label><input id="parcels-dxf-3d" type="checkbox"> DXF draped on terrain (3D polylines)</label>
+                    <label><input id="parcels-dxf-local" type="checkbox"> DXF with local origin (for Rhino)</label>
+                </div>
+                <div class="ctrl">
+                    <button id="parcels-dxf" type="button" disabled>DXF</button>
+                    <button id="parcels-geojson" type="button" disabled>GeoJSON</button>
+                    <button id="parcels-csv" type="button" disabled>CSV (WKT)</button>
+                    <button id="parcels-clear" type="button" disabled>Clear</button>
+                    <div id="parcels-export-scope" class="section-info"></div>
+                </div>
+                <div id="parcels-info" class="section-info">
+                    Parcel boundaries of the cadastral survey (amtliche Vermessung) from geodienste.ch, in LV95.
+                    Open data in most cantons; JU, LU, NE, NW, OW and VD release vector data only with a contract.
+                    Not legally binding.
+                </div>
+            </div>
+        </details>
+
+        <details class="fold" open>
             <summary>Surfaces</summary>
             <div class="fold-body">
                 <div class="ctrl">
@@ -690,6 +735,7 @@
 <script src="./export.js"></script>
 <script src="./atmosphere.js"></script>
 <script src="./trees.js"></script>
+<script src="./parcels.js"></script>
 <script src="./buildings3d.js"></script>
 <script src="./surfaces.js"></script>
 <script src="./figures.js"></script>

@@ -1,0 +1,903 @@
+/*
+ * Swiss LiDAR Viewer - parcel boundaries (Liegenschaften, amtliche Vermessung)
+ *
+ * Source: geodienste.ch, the cantons' aggregation of the cadastral survey
+ * (MGDM DM.01-AV-CH), via OGC API Features "AV: Standard":
+ *
+ *   https://geodienste.ch/db/av_0/deu/ogcapi/collections/<id>/items
+ *
+ *   RESF       legally valid parcels (Liegenschaften)
+ *   RESFPROJ   projected parcels (in mutation)
+ *   DPRSF      distinct and permanent rights (SDR, Baurechte) and mines
+ *   DPRSFPROJ  projected SDR
+ *
+ * Requested directly in LV95 (crs / bbox-crs = EPSG:2056), as GeoJSON.
+ * Fallback: the geo.admin.ch identify service on the cadastral web map.
+ *
+ * Open data in most cantons. JU, LU, NE, NW, OW and VD require a contract for
+ * vector data, so anonymous requests there return nothing.
+ *
+ * Finding parcels: parcel number or address (geo.admin.ch search, origin
+ * "parcel"), a click on the map, the current tile, or the map view.
+ *
+ * Display: Leaflet polygons (click to select) and, optionally, boundary lines
+ * draped on swissALTI3D in the 3D view.
+ *
+ * Export (selected parcels, or all loaded): GeoJSON, DXF (2D or draped 3D,
+ * absolute LV95 or local origin), CSV with WKT. Coordinates are LV95.
+ *
+ * Not legally binding: only an extract from the cantonal cadastral survey is.
+ */
+
+(function () {
+    "use strict";
+
+    const AV_OGC = "https://geodienste.ch/db/av_0/deu/ogcapi";
+    const CRS_2056 = "http://www.opengis.net/def/crs/EPSG/0/2056";
+    const IDENTIFY_URL = "https://api3.geo.admin.ch/rest/services/ech/MapServer/identify";
+    const FALLBACK_LAYER = "ch.kantone.cadastralwebmap-farbe";
+    const RESTRICTED_CANTONS = "JU, LU, NE, NW, OW, VD";
+
+    const KINDS = {
+        RESF:      { label: "Parcel",            dxf: "AV_PARZELLE",      aci: 1, color: "#d62828", dash: null },
+        RESFPROJ:  { label: "Projected parcel",  dxf: "AV_PARZELLE_PROJ", aci: 30, color: "#f77f00", dash: "6 4" },
+        DPRSF:     { label: "Right (SDR)",       dxf: "AV_SDR",           aci: 6, color: "#7b2cbf", dash: "2 4" },
+        DPRSFPROJ: { label: "Projected right",   dxf: "AV_SDR_PROJ",      aci: 200, color: "#b185db", dash: "2 4" }
+    };
+
+    const MAX_AREA_M2 = 4e6;          // largest box loaded at once (2 km x 2 km)
+    const PAGE_LIMIT = 500;
+    const DRAPE_STEP = 2;             // m between draped vertices
+    const DRAPE_LIFT = 0.3;           // m above the terrain in 3D
+
+    const state = {
+        parcels: new Map(),           // key -> parcel
+        layer: null,                  // Leaflet layer group
+        group3d: null,                // THREE group
+        busy: false,
+        picking: false,
+        pickHandler: null,
+        abort: null,
+        source: ""
+    };
+
+    const el = id => document.getElementById(id);
+
+    function setInfo(text) {
+        const info = el("parcels-info");
+        if (info) info.textContent = text;
+    }
+
+    /* ============================================================
+       GEOMETRY (pure)
+       ============================================================ */
+
+    /* Coordinates to LV95 [E, N], whatever the server sent. */
+    function toLV95([a, b]) {
+        if (a > 2e6 && b > 1e6 && b < 2e6) return [a, b];               // E, N
+        if (b > 2e6 && a > 1e6 && a < 2e6) return [b, a];               // N, E
+        if (Math.abs(a) <= 180 && Math.abs(b) <= 90) {                  // lon, lat
+            const lonLat = a > 20 ? [b, a] : [a, b];                     // lat, lon
+            return proj4("EPSG:4326", "EPSG:2056", lonLat);
+        }
+        return [a, b];
+    }
+
+    /* GeoJSON geometry -> [[outer, hole, ...], ...] in LV95, rings open. */
+    function polygonsOf(geometry) {
+        if (!geometry) return [];
+        const open = ring => {
+            const r = ring.map(toLV95);
+            const f = r[0], l = r[r.length - 1];
+            if (r.length > 1 && f[0] === l[0] && f[1] === l[1]) r.pop();
+            return r;
+        };
+        if (geometry.type === "Polygon") return [geometry.coordinates.map(open)];
+        if (geometry.type === "MultiPolygon") return geometry.coordinates.map(p => p.map(open));
+        if (geometry.type === "GeometryCollection") return (geometry.geometries || []).flatMap(polygonsOf);
+        // ESRI JSON (identify without geometryFormat=geojson)
+        if (Array.isArray(geometry.rings)) return geometry.rings.map(r => [open(r)]);
+        return [];
+    }
+
+    function ringArea(ring) {
+        let s = 0;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            s += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);
+        }
+        return s / 2;
+    }
+
+    function ringLength(ring) {
+        let s = 0;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            s += Math.hypot(ring[i][0] - ring[j][0], ring[i][1] - ring[j][1]);
+        }
+        return s;
+    }
+
+    function polygonsArea(polys) {
+        return polys.reduce((sum, rings) =>
+            sum + Math.abs(ringArea(rings[0])) - rings.slice(1).reduce((h, r) => h + Math.abs(ringArea(r)), 0), 0);
+    }
+
+    function insideRing(ring, e, n) {
+        let inside = false;
+        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+            const [xi, yi] = ring[i], [xj, yj] = ring[j];
+            if ((yi > n) !== (yj > n) && e < (xj - xi) * (n - yi) / (yj - yi) + xi) inside = !inside;
+        }
+        return inside;
+    }
+
+    function containsPoint(polys, e, n) {
+        return polys.some(rings => insideRing(rings[0], e, n) && !rings.slice(1).some(h => insideRing(h, e, n)));
+    }
+
+    /* A label point inside the largest polygon (centroid, or a scanline midpoint). */
+    function labelPoint(polys) {
+        let best = null, bestA = -1;
+        for (const rings of polys) {
+            const a = Math.abs(ringArea(rings[0]));
+            if (a > bestA) { bestA = a; best = rings; }
+        }
+        if (!best) return null;
+
+        const outer = best[0];
+        let cx = 0, cy = 0, a6 = 0;
+        for (let i = 0, j = outer.length - 1; i < outer.length; j = i++) {
+            const f = outer[j][0] * outer[i][1] - outer[i][0] * outer[j][1];
+            cx += (outer[j][0] + outer[i][0]) * f;
+            cy += (outer[j][1] + outer[i][1]) * f;
+            a6 += f * 3;
+        }
+        if (a6 !== 0) {
+            const c = [cx / a6, cy / a6];
+            if (containsPoint([best], c[0], c[1])) return c;
+        }
+
+        // scanline through the vertical middle: midpoint of the widest span
+        const ys = outer.map(p => p[1]);
+        const y = (Math.min(...ys) + Math.max(...ys)) / 2;
+        const xs = [];
+        for (const ring of best) {
+            for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+                const [xi, yi] = ring[i], [xj, yj] = ring[j];
+                if ((yi > y) !== (yj > y)) xs.push(xi + (y - yi) * (xj - xi) / (yj - yi));
+            }
+        }
+        xs.sort((p, q) => p - q);
+        let span = null;
+        for (let i = 0; i + 1 < xs.length; i += 2) {
+            if (!span || xs[i + 1] - xs[i] > span[1] - span[0]) span = [xs[i], xs[i + 1]];
+        }
+        return span ? [(span[0] + span[1]) / 2, y] : outer[0];
+    }
+
+    /* Ring -> closed vertex list with extra vertices every `step` m. */
+    function densify(ring, step) {
+        const out = [];
+        for (let i = 0; i < ring.length; i++) {
+            const a = ring[i], b = ring[(i + 1) % ring.length];
+            const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step));
+            for (let k = 0; k < n; k++) out.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]);
+        }
+        out.push(out[0]);
+        return out;
+    }
+
+    /* ============================================================
+       ATTRIBUTES
+       ============================================================ */
+
+    function pick(props, names) {
+        const keys = Object.keys(props || {});
+        for (const name of names) {
+            const key = keys.find(k => k.toLowerCase() === name);
+            if (key && props[key] !== null && props[key] !== "") return String(props[key]);
+        }
+        return "";
+    }
+
+    function makeParcel(feature, kind) {
+        const props = feature.properties || feature.attributes || {};
+        const polygons = polygonsOf(feature.geometry);
+        if (!polygons.length) return null;
+
+        const number = pick(props, ["number", "nummer", "numero", "label", "parcel_number", "parzellennummer"]);
+        const egrid = pick(props, ["egris_egrid", "egrid", "egris_egrid_txt"]);
+        const nbident = pick(props, ["identnd", "nbident", "ident_nd"]);
+        const bfs = pick(props, ["bfsnr", "bfs_nr", "fosnr", "gemeinde_bfs", "bfs"]);
+        const canton = pick(props, ["kanton", "canton", "ak"]);
+
+        const first = polygons[0][0][0];
+        const key = `${kind}|${egrid || `${nbident}|${number}|${bfs}` || feature.id || ""}|${first[0].toFixed(2)},${first[1].toFixed(2)}`;
+
+        const area = polygonsArea(polygons);
+
+        return {
+            key, kind, number, egrid, nbident, bfs, canton, props, polygons,
+            area,
+            perimeter: polygons.reduce((s, rings) => s + rings.reduce((t, r) => t + ringLength(r), 0), 0),
+            label: labelPoint(polygons),
+            selected: false
+        };
+    }
+
+    function title(p) {
+        return p.number ? `${KINDS[p.kind]?.label || p.kind} ${p.number}` : (KINDS[p.kind]?.label || p.kind);
+    }
+
+    /* ============================================================
+       LOADING
+       ============================================================ */
+
+    class AccessError extends Error {}
+
+    async function fetchOgc(kind, box, signal) {
+        let url = new URL(`${AV_OGC}/collections/${kind}/items`);
+        url.searchParams.set("f", "json");
+        url.searchParams.set("limit", String(PAGE_LIMIT));
+        url.searchParams.set("bbox", [box.minE, box.minN, box.maxE, box.maxN].map(v => v.toFixed(2)).join(","));
+        url.searchParams.set("bbox-crs", CRS_2056);
+        url.searchParams.set("crs", CRS_2056);
+
+        const features = [];
+
+        for (let page = 0; url && page < 40; page++) {
+            const response = await fetch(url, { signal, headers: { Accept: "application/geo+json, application/json" } });
+
+            if (response.status === 401 || response.status === 403) {
+                throw new AccessError(`geodienste.ch refused access (${response.status})`);
+            }
+            if (!response.ok) throw new Error(`geodienste.ch ${kind}: HTTP ${response.status}`);
+
+            const data = await response.json();
+            const batch = data.features || [];
+            features.push(...batch);
+
+            const next = (data.links || []).find(l => l.rel === "next");
+            url = next && batch.length ? new URL(next.href, url) : null;
+
+            setInfo(`Loading ${KINDS[kind].label.toLowerCase()}s… ${features.length}`);
+        }
+
+        return features;
+    }
+
+    /* geo.admin.ch identify on the cadastral web map (parcels only). */
+    async function fetchIdentify(box, signal) {
+        const url = new URL(IDENTIFY_URL);
+        const extent = [box.minE, box.minN, box.maxE, box.maxN].join(",");
+        const params = {
+            geometry: extent,
+            geometryType: "esriGeometryEnvelope",
+            layers: `all:${FALLBACK_LAYER}`,
+            mapExtent: extent,
+            imageDisplay: "1000,1000,96",
+            tolerance: "0",
+            sr: "2056",
+            returnGeometry: "true",
+            geometryFormat: "geojson",
+            limit: "200"
+        };
+        for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
+
+        const response = await fetch(url, { signal });
+        if (!response.ok) throw new Error(`geo.admin.ch identify: HTTP ${response.status}`);
+        return ((await response.json()).results || []).filter(f => f.geometry);
+    }
+
+    function wantedKinds() {
+        const kinds = ["RESF"];
+        if (el("parcels-proj")?.checked) kinds.push("RESFPROJ");
+        if (el("parcels-sdr")?.checked) kinds.push("DPRSF", ...(el("parcels-proj")?.checked ? ["DPRSFPROJ"] : []));
+        return kinds;
+    }
+
+    /* Loads all parcels touching box. Returns the parcels of this request. */
+    async function loadBox(box) {
+        const area = (box.maxE - box.minE) * (box.maxN - box.minN);
+        if (area > MAX_AREA_M2) {
+            throw new Error(`Area too large (${(area / 1e6).toFixed(1)} km²). Zoom in to 2 km × 2 km or less.`);
+        }
+
+        state.abort?.abort();
+        state.abort = new AbortController();
+        const signal = state.abort.signal;
+
+        const found = [];
+        let viaOgc = true;
+
+        try {
+            for (const kind of wantedKinds()) {
+                for (const f of await fetchOgc(kind, box, signal)) {
+                    const p = makeParcel(f, kind);
+                    if (p) found.push(p);
+                }
+            }
+            state.source = "geodienste.ch (AV, OGC API Features)";
+        } catch (error) {
+            if (error.name === "AbortError") throw error;
+            console.warn("[parcels] geodienste.ch failed, trying geo.admin.ch:", error);
+            viaOgc = false;
+
+            const features = await fetchIdentify(box, signal);
+            for (const f of features) {
+                const p = makeParcel(f, "RESF");
+                if (p) found.push(p);
+            }
+            state.source = "geo.admin.ch identify (cadastral web map)";
+
+            if (!found.length) {
+                throw new Error(error instanceof AccessError
+                    ? `No access to the parcel data here. Cantons ${RESTRICTED_CANTONS} release vector data only with a contract.`
+                    : `Could not load parcels (${error.message}).`);
+            }
+        }
+
+        const added = [];
+        for (const p of found) {
+            if (!state.parcels.has(p.key)) {
+                state.parcels.set(p.key, p);
+                added.push(p);
+            } else {
+                added.push(state.parcels.get(p.key));
+            }
+        }
+
+        if (!found.length && viaOgc) {
+            setInfo(`No parcels returned for this area. If it lies in ${RESTRICTED_CANTONS}, the canton releases vector data only with a contract.`);
+        }
+
+        return added;
+    }
+
+    function tileBox() {
+        if (!currentTile || typeof swissTileExtentLV95 !== "function") return null;
+        return swissTileExtentLV95(0);
+    }
+
+    function mapBox() {
+        if (!map) return null;
+        const b = map.getBounds();
+        const corners = [b.getSouthWest(), b.getNorthWest(), b.getNorthEast(), b.getSouthEast()]
+            .map(c => proj4("EPSG:4326", "EPSG:2056", [c.lng, c.lat]));
+        return {
+            minE: Math.min(...corners.map(c => c[0])), maxE: Math.max(...corners.map(c => c[0])),
+            minN: Math.min(...corners.map(c => c[1])), maxN: Math.max(...corners.map(c => c[1]))
+        };
+    }
+
+    async function run(label, task) {
+        if (state.busy) return;
+        state.busy = true;
+        updateButtons();
+        setInfo(label);
+        try {
+            await task();
+        } catch (error) {
+            if (error.name !== "AbortError") {
+                console.error("[parcels]", error);
+                setInfo(error.message);
+            }
+        } finally {
+            state.busy = false;
+            updateButtons();
+        }
+    }
+
+    function loadArea(which) {
+        run("Loading parcels…", async () => {
+            const box = which === "tile" ? tileBox() : mapBox();
+            if (!box) throw new Error(which === "tile" ? "Select a tile first." : "The map is not ready.");
+            const parcels = await loadBox(box);
+            refresh();
+            if (parcels.length) setInfo(`${parcels.length} parcel(s) loaded from ${state.source}. Click parcels on the map to select them for export.`);
+        });
+    }
+
+    /* Parcel(s) at one LV95 point: loads a small box and selects what contains it. */
+    function loadAtPoint(e, n, zoom = true) {
+        return run("Looking up the parcel…", async () => {
+            const parcels = await loadBox({ minE: e - 5, minN: n - 5, maxE: e + 5, maxN: n + 5 });
+            const hits = parcels.filter(p => containsPoint(p.polygons, e, n));
+
+            if (!hits.length) {
+                refresh();
+                if (parcels.length) setInfo("No parcel contains this point exactly; the neighbours were loaded.");
+                return;
+            }
+
+            for (const p of hits) p.selected = true;
+            refresh();
+
+            if (zoom && map && state.layer) {
+                const bounds = L.latLngBounds(hits.flatMap(p => p.polygons[0][0].map(lv95ToLatLng)));
+                map.fitBounds(bounds.pad(0.6), { maxZoom: 19 });
+            }
+
+            setInfo(hits.map(p => `${title(p)}${p.egrid ? ` (${p.egrid})` : ""}, ${Math.round(p.area)} m²`).join("; ") + " selected.");
+        });
+    }
+
+    /* ============================================================
+       SEARCH (geo.admin.ch, parcels and addresses)
+       ============================================================ */
+
+    async function search() {
+        const query = el("parcels-search")?.value.trim();
+        const list = el("parcels-results");
+        if (!query || !list) return;
+
+        list.innerHTML = "";
+        setInfo(`Searching ${query}…`);
+
+        try {
+            const url = new URL(CONFIG.SEARCH_URL || "https://api3.geo.admin.ch/rest/services/ech/SearchServer");
+            url.searchParams.set("searchText", query);
+            url.searchParams.set("type", "locations");
+            url.searchParams.set("origins", "parcel,address");
+            url.searchParams.set("sr", "2056");
+            url.searchParams.set("limit", "12");
+
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`search failed (${response.status})`);
+            const results = (await response.json()).results || [];
+
+            // parcels first
+            results.sort((a, b) => (a.attrs?.origin === "parcel" ? 0 : 1) - (b.attrs?.origin === "parcel" ? 0 : 1));
+
+            for (const r of results) {
+                const attrs = r.attrs || {};
+                const lat = Number(attrs.lat), lon = Number(attrs.lon);
+                if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "search-result";
+                button.textContent = `${attrs.origin === "parcel" ? "Parcel" : "Address"}: ${String(attrs.label || "").replace(/<[^>]*>/g, "").trim()}`;
+                button.addEventListener("click", () => {
+                    const [e, n] = proj4("EPSG:4326", "EPSG:2056", [lon, lat]);
+                    loadAtPoint(e, n);
+                });
+                list.appendChild(button);
+            }
+
+            setInfo(list.children.length
+                ? "Choose a result to load and select its parcel."
+                : "Nothing found. Try “municipality number”, e.g. “Köniz 1234”, or an address.");
+        } catch (error) {
+            setInfo(`Search failed: ${error.message}`);
+        }
+    }
+
+    function togglePick() {
+        if (!map) return;
+        state.picking = !state.picking;
+        const button = el("parcels-pick");
+        if (button) button.textContent = state.picking ? "Click a parcel on the map… (cancel)" : "Pick a parcel on the map";
+        map.getContainer().style.cursor = state.picking ? "crosshair" : "";
+
+        if (state.picking) {
+            state.pickHandler = event => {
+                state.picking = false;
+                state.pickHandler = null;
+                if (button) button.textContent = "Pick a parcel on the map";
+                map.getContainer().style.cursor = "";
+                const [e, n] = proj4("EPSG:4326", "EPSG:2056", [event.latlng.lng, event.latlng.lat]);
+                loadAtPoint(e, n, false);
+            };
+            map.once("click", state.pickHandler);
+        } else if (state.pickHandler) {
+            map.off("click", state.pickHandler);     // only ours, not the app's handlers
+            state.pickHandler = null;
+        }
+    }
+
+    /* ============================================================
+       DISPLAY: map
+       ============================================================ */
+
+    function lv95ToLatLng([e, n]) {
+        const [lon, lat] = proj4("EPSG:2056", "EPSG:4326", [e, n]);
+        return [lat, lon];
+    }
+
+    function styleFor(p) {
+        const k = KINDS[p.kind] || KINDS.RESF;
+        return {
+            color: k.color,
+            weight: p.selected ? 3 : 1.5,
+            dashArray: k.dash,
+            fillColor: k.color,
+            fillOpacity: p.selected ? 0.28 : 0.04
+        };
+    }
+
+    function drawMap() {
+        if (!map || typeof L === "undefined") return;
+
+        if (!state.layer) state.layer = L.layerGroup().addTo(map);
+        state.layer.clearLayers();
+        if (el("parcels-show-map") && !el("parcels-show-map").checked) return;
+
+        for (const p of state.parcels.values()) {
+            const latlngs = p.polygons.map(rings => rings.map(r => r.map(lv95ToLatLng)));
+            const poly = L.polygon(latlngs, styleFor(p));
+            poly.bindTooltip(`${title(p)}${p.egrid ? `<br>${p.egrid}` : ""}<br>${Math.round(p.area)} m²`, { sticky: true });
+            poly.on("click", event => {
+                if (state.picking) return;
+                L.DomEvent.stopPropagation(event);
+                p.selected = !p.selected;
+                poly.setStyle(styleFor(p));
+                renderList();
+                draw3d();
+            });
+            poly.addTo(state.layer);
+        }
+    }
+
+    /* ============================================================
+       DISPLAY: 3D (boundary lines on swissALTI3D)
+       ============================================================ */
+
+    function worldOffset(extent) {
+        try {
+            const box = currentPointCloud?.boundingBox?.clone();
+            if (!box) return [0, 0];
+            if (currentPointCloud.matrixWorld && !currentPointCloud.isLaz) box.applyMatrix4(currentPointCloud.matrixWorld);
+            const dx = box.min.x - extent.minE, dy = box.min.y - extent.minN;
+            if (Math.abs(dx) > 100000 || Math.abs(dy) > 100000) return [dx, dy];
+        } catch (error) { /* keep LV95 */ }
+        return [0, 0];
+    }
+
+    function terrainKey() {
+        return currentTile && typeof tileKey === "function" ? tileKey(currentTile, 0) : null;
+    }
+
+    function zAt(e, n) {
+        return typeof swissAltiAt === "function" ? swissAltiAt(e, n, terrainKey()) : NaN;
+    }
+
+    function clear3d() {
+        if (!state.group3d) return;
+        state.group3d.parent?.remove(state.group3d);
+        state.group3d.traverse(o => { o.geometry?.dispose?.(); o.material?.dispose?.(); });
+        state.group3d = null;
+        window.ATMO?.invalidate?.();
+    }
+
+    async function draw3d() {
+        clear3d();
+        if (!el("parcels-show-3d")?.checked || !state.parcels.size) return;
+        if (typeof viewer === "undefined" || !viewer || !currentTile || typeof THREE === "undefined") return;
+
+        try {
+            if (typeof swissEnsureAlti === "function") await swissEnsureAlti();
+        } catch (error) {
+            setInfo("3D view needs swissALTI3D for this tile, which could not be loaded.");
+            return;
+        }
+
+        const extent = swissTileExtentLV95(0);
+        const [dx, dy] = worldOffset(extent);
+        const group = new THREE.Group();
+        group.name = "parcels";
+
+        for (const p of state.parcels.values()) {
+            const positions = [];
+            for (const rings of p.polygons) {
+                for (const ring of rings) {
+                    const pts = densify(ring, DRAPE_STEP);
+                    for (let i = 0; i + 1 < pts.length; i++) {
+                        const za = zAt(pts[i][0], pts[i][1]), zb = zAt(pts[i + 1][0], pts[i + 1][1]);
+                        if (!(za === za && zb === zb)) continue;          // outside the terrain
+                        positions.push(pts[i][0] + dx, pts[i][1] + dy, za + DRAPE_LIFT,
+                            pts[i + 1][0] + dx, pts[i + 1][1] + dy, zb + DRAPE_LIFT);
+                    }
+                }
+            }
+            if (!positions.length) continue;
+
+            const geometry = new THREE.BufferGeometry();
+            const attr = new THREE.Float32BufferAttribute(positions, 3);
+            if (typeof geometry.setAttribute === "function") geometry.setAttribute("position", attr);
+            else geometry.addAttribute("position", attr);
+
+            const material = new THREE.LineBasicMaterial({
+                color: new THREE.Color(KINDS[p.kind]?.color || "#d62828"),
+                transparent: true,
+                opacity: p.selected ? 1 : 0.55,
+                depthTest: true
+            });
+            const lines = new THREE.LineSegments(geometry, material);
+            lines.renderOrder = 10;
+            group.add(lines);
+        }
+
+        state.group3d = group;
+        viewer.scene.scene.add(group);
+        window.ATMO?.invalidate?.();
+    }
+
+    /* ============================================================
+       LIST
+       ============================================================ */
+
+    function sorted() {
+        return [...state.parcels.values()].sort((a, b) =>
+            (b.selected - a.selected) || a.kind.localeCompare(b.kind) ||
+            a.number.localeCompare(b.number, undefined, { numeric: true }));
+    }
+
+    function renderList() {
+        const list = el("parcels-list");
+        if (!list) return;
+        list.innerHTML = "";
+
+        for (const p of sorted().slice(0, 300)) {
+            const row = document.createElement("label");
+            row.className = "parcels-row";
+            const box = document.createElement("input");
+            box.type = "checkbox";
+            box.checked = p.selected;
+            box.addEventListener("change", () => {
+                p.selected = box.checked;
+                drawMap();
+                draw3d();
+                updateButtons();
+            });
+            const text = document.createElement("span");
+            text.textContent = `${title(p)} · ${Math.round(p.area).toLocaleString("de-CH")} m²${p.egrid ? ` · ${p.egrid}` : ""}`;
+            row.append(box, text);
+            list.appendChild(row);
+        }
+
+        if (state.parcels.size > 300) {
+            const more = document.createElement("div");
+            more.className = "hint";
+            more.textContent = `${state.parcels.size - 300} more not listed (select them on the map).`;
+            list.appendChild(more);
+        }
+
+        updateButtons();
+    }
+
+    function refresh() {
+        drawMap();
+        renderList();
+        draw3d();
+    }
+
+    function selection() {
+        const all = [...state.parcels.values()];
+        const chosen = all.filter(p => p.selected);
+        return chosen.length ? chosen : all;
+    }
+
+    function updateButtons() {
+        const n = state.parcels.size;
+        const s = [...state.parcels.values()].filter(p => p.selected).length;
+        for (const id of ["parcels-geojson", "parcels-dxf", "parcels-csv", "parcels-clear", "parcels-select-all", "parcels-select-none"]) {
+            if (el(id)) el(id).disabled = !n || state.busy;
+        }
+        for (const id of ["parcels-tile", "parcels-view", "parcels-pick", "parcels-search-button"]) {
+            if (el(id)) el(id).disabled = state.busy;
+        }
+        if (el("parcels-tile") && !currentTile) el("parcels-tile").disabled = true;
+        const count = el("parcels-count");
+        if (count) count.textContent = n ? `${s ? `${s} selected of ` : ""}${n}` : "0";
+        const scope = el("parcels-export-scope");
+        if (scope) scope.textContent = n ? (s ? `Exports the ${s} selected parcel(s).` : `Nothing selected: exports all ${n} loaded parcels.`) : "";
+    }
+
+    /* ============================================================
+       EXPORT
+       ============================================================ */
+
+    const DISCLAIMER = "Not legally binding. Only an extract from the cantonal cadastral survey is.";
+
+    function download(name, text, type) {
+        const blob = new Blob([text], { type });
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+        window.usageCounter?.hit("downloads");
+    }
+
+    function baseName(parcels) {
+        if (parcels.length === 1 && parcels[0].number) {
+            return `parcel_${(parcels[0].egrid || parcels[0].number).replace(/[^\w-]+/g, "_")}`;
+        }
+        const tile = typeof swissKmTileId === "function" ? swissKmTileId(currentTile) : null;
+        return `parcels_${tile || new Date().toISOString().slice(0, 10)}`;
+    }
+
+    function exportGeoJson() {
+        const parcels = selection();
+        const round = v => Math.round(v * 1000) / 1000;
+        const ring = r => [...r, r[0]].map(([e, n]) => [round(e), round(n)]);
+
+        const collection = {
+            type: "FeatureCollection",
+            name: baseName(parcels),
+            crs: { type: "name", properties: { name: "urn:ogc:def:crs:EPSG::2056" } },
+            features: parcels.map(p => ({
+                type: "Feature",
+                properties: {
+                    kind: p.kind, number: p.number, egrid: p.egrid, nbident: p.nbident,
+                    area_m2: round(p.area), perimeter_m: round(p.perimeter),
+                    source: state.source,
+                    ...p.props
+                },
+                geometry: p.polygons.length === 1
+                    ? { type: "Polygon", coordinates: p.polygons[0].map(ring) }
+                    : { type: "MultiPolygon", coordinates: p.polygons.map(rs => rs.map(ring)) }
+            }))
+        };
+
+        download(`${baseName(parcels)}_LV95.geojson`, JSON.stringify(collection), "application/geo+json");
+    }
+
+    function exportCsv() {
+        const parcels = selection();
+        const f = v => v.toFixed(3);
+        const wkt = p => {
+            const ring = r => `(${[...r, r[0]].map(([e, n]) => `${f(e)} ${f(n)}`).join(", ")})`;
+            const poly = rs => `(${rs.map(ring).join(", ")})`;
+            return p.polygons.length === 1 ? `POLYGON ${poly(p.polygons[0])}` : `MULTIPOLYGON (${p.polygons.map(poly).join(", ")})`;
+        };
+        const quote = s => `"${String(s).replace(/"/g, '""')}"`;
+        const rows = ["kind;number;egrid;nbident;area_m2;perimeter_m;label_E;label_N;wkt_lv95"];
+        for (const p of parcels) {
+            rows.push([p.kind, p.number, p.egrid, p.nbident, p.area.toFixed(1), p.perimeter.toFixed(2),
+                p.label ? f(p.label[0]) : "", p.label ? f(p.label[1]) : "", quote(wkt(p))].join(";"));
+        }
+        download(`${baseName(parcels)}_LV95.csv`, "\ufeff" + rows.join("\r\n"), "text/csv");
+    }
+
+    /*
+     * DXF R12 (AC1009): opens in Rhino, AutoCAD, QGIS, Vectorworks, ArchiCAD.
+     * One closed POLYLINE per ring, layers per kind, parcel numbers as TEXT.
+     * opts.drape: 3D polylines on swissALTI3D; opts.origin: [E, N] subtracted.
+     */
+    function buildDxf(parcels, opts) {
+        const [oE, oN] = opts.origin || [0, 0];
+        const f = v => v.toFixed(3);
+        const out = [];
+        const g = (code, value) => out.push(String(code), String(value));
+
+        const used = [...new Set(parcels.map(p => p.kind))];
+
+        g(0, "SECTION"); g(2, "HEADER");
+        g(9, "$ACADVER"); g(1, "AC1009");
+        g(9, "$INSUNITS"); g(70, 6);
+        g(0, "ENDSEC");
+
+        g(0, "SECTION"); g(2, "TABLES");
+        g(0, "TABLE"); g(2, "LAYER"); g(70, used.length * 2);
+        for (const kind of used) {
+            for (const [name, aci] of [[KINDS[kind].dxf, KINDS[kind].aci], [`${KINDS[kind].dxf}_NR`, 7]]) {
+                g(0, "LAYER"); g(2, name); g(70, 0); g(62, aci); g(6, "CONTINUOUS");
+            }
+        }
+        g(0, "ENDTAB");
+        g(0, "ENDSEC");
+
+        g(0, "SECTION"); g(2, "ENTITIES");
+
+        for (const p of parcels) {
+            const layer = KINDS[p.kind].dxf;
+
+            for (const rings of p.polygons) {
+                for (const ring of rings) {
+                    let pts = ring.map(([e, n]) => [e, n, 0]);
+
+                    if (opts.drape) {
+                        pts = densify(ring, DRAPE_STEP).slice(0, -1).map(([e, n]) => [e, n, zAt(e, n)]);
+                        const valid = pts.filter(q => q[2] === q[2]);
+                        const mean = valid.length ? valid.reduce((s, q) => s + q[2], 0) / valid.length : 0;
+                        for (const q of pts) if (!(q[2] === q[2])) q[2] = mean;
+                    }
+
+                    g(0, "POLYLINE"); g(8, layer); g(66, 1);
+                    g(10, 0); g(20, 0); g(30, 0);
+                    g(70, opts.drape ? 9 : 1);                 // 1 closed, 8 3D polyline
+                    for (const [e, n, z] of pts) {
+                        g(0, "VERTEX"); g(8, layer);
+                        g(10, f(e - oE)); g(20, f(n - oN)); g(30, f(z));
+                        if (opts.drape) g(70, 32);
+                    }
+                    g(0, "SEQEND"); g(8, layer);
+                }
+            }
+
+            if (p.number && p.label) {
+                const z = opts.drape ? (zAt(p.label[0], p.label[1]) || 0) : 0;
+                const h = Math.max(0.8, Math.min(4, Math.sqrt(p.area) / 12));
+                g(0, "TEXT"); g(8, `${layer}_NR`);
+                g(10, f(p.label[0] - oE)); g(20, f(p.label[1] - oN)); g(30, f(z));
+                g(40, h.toFixed(2)); g(1, p.number);
+                g(72, 1); g(73, 2);                             // centred
+                g(11, f(p.label[0] - oE)); g(21, f(p.label[1] - oN)); g(31, f(z));
+            }
+        }
+
+        g(0, "ENDSEC");
+        g(0, "EOF");
+        return out.join("\r\n") + "\r\n";
+    }
+
+    async function exportDxf() {
+        const parcels = selection();
+        const drape = el("parcels-dxf-3d")?.checked;
+        const local = el("parcels-dxf-local")?.checked;
+
+        if (drape) {
+            if (!currentTile) { setInfo("Draped 3D export needs a selected tile (for swissALTI3D)."); return; }
+            setInfo("Loading swissALTI3D for draping…");
+            await swissEnsureAlti();
+        }
+
+        let origin = [0, 0];
+        if (local) {
+            let minE = Infinity, minN = Infinity;
+            for (const p of parcels) {
+                for (const [e, n] of p.polygons.flat(2)) { if (e < minE) minE = e; if (n < minN) minN = n; }
+            }
+            origin = [Math.floor(minE / 100) * 100, Math.floor(minN / 100) * 100];
+        }
+
+        const name = `${baseName(parcels)}_LV95${drape ? "_3D" : ""}${local ? `_origin_${origin[0]}_${origin[1]}` : ""}.dxf`;
+        download(name, buildDxf(parcels, { drape, origin }), "application/dxf");
+        setInfo(`${parcels.length} parcel(s) exported. ${DISCLAIMER}`);
+    }
+
+    function clearAll() {
+        state.parcels.clear();
+        state.layer?.clearLayers();
+        clear3d();
+        renderList();
+        if (el("parcels-results")) el("parcels-results").innerHTML = "";
+        setInfo("Parcels cleared.");
+    }
+
+    /* ============================================================
+       INIT
+       ============================================================ */
+
+    function init() {
+        el("parcels-search-button")?.addEventListener("click", search);
+        el("parcels-search")?.addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+        el("parcels-pick")?.addEventListener("click", togglePick);
+        el("parcels-tile")?.addEventListener("click", () => loadArea("tile"));
+        el("parcels-view")?.addEventListener("click", () => loadArea("view"));
+        el("parcels-show-map")?.addEventListener("change", drawMap);
+        el("parcels-show-3d")?.addEventListener("change", draw3d);
+        el("parcels-select-all")?.addEventListener("click", () => { for (const p of state.parcels.values()) p.selected = true; refresh(); });
+        el("parcels-select-none")?.addEventListener("click", () => { for (const p of state.parcels.values()) p.selected = false; refresh(); });
+        el("parcels-clear")?.addEventListener("click", clearAll);
+        el("parcels-geojson")?.addEventListener("click", exportGeoJson);
+        el("parcels-csv")?.addEventListener("click", exportCsv);
+        el("parcels-dxf")?.addEventListener("click", () => exportDxf().catch(err => setInfo(`DXF export failed: ${err.message}`)));
+
+        // the "load for this tile" button depends on the selected tile
+        setInterval(updateButtons, 1500);
+        updateButtons();
+    }
+
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
+    else init();
+
+    // for the console and other modules
+    window.swissParcels = {
+        parcels: () => [...state.parcels.values()],
+        loadAtPoint, loadBox: box => loadBox(box).then(p => { refresh(); return p; }),
+        _test: { polygonsOf, polygonsArea, containsPoint, labelPoint, densify, buildDxf, makeParcel }
+    };
+})();

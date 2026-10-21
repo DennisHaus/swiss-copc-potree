@@ -1,12 +1,58 @@
 diff --git a/index.html b/index.html
-index 6b8f66e..53f9cc3 100644
+index 6b8f66e..de91801 100644
 --- a/index.html
 +++ b/index.html
-@@ -310,6 +310,51 @@
+@@ -111,7 +111,7 @@
+     <!-- Left dock: map, search, tiles -->
+     <aside id="dock-left" class="dock">
+ 
+-        <details class="fold" id="fold-map" open>
++        <details class="fold" id="fold-map">
+             <summary>Map and search</summary>
+             <div class="fold-body">
+                 <div class="search-row">
+@@ -139,7 +139,7 @@
              </div>
          </details>
  
-+        <details class="fold" open>
+-        <details class="fold fold-grow" id="fold-tiles" open>
++        <details class="fold fold-grow" id="fold-tiles">
+             <summary>Tiles <span id="tile-count" class="badge">0</span></summary>
+             <div class="fold-body no-pad">
+                 <div id="tile-list"></div>
+@@ -151,7 +151,7 @@
+     <!-- Right dock: tile, display, appearance, sections, export -->
+     <aside id="dock-right" class="dock">
+ 
+-        <details class="fold" open>
++        <details class="fold">
+             <summary>Selected tile</summary>
+             <div class="fold-body">
+                 <div id="selected-title">No tile selected</div>
+@@ -175,7 +175,7 @@
+             </div>
+         </details>
+ 
+-        <details class="fold" open>
++        <details class="fold">
+             <summary>Colour</summary>
+             <div class="fold-body">
+                 <label for="color-mode" class="control-label">Colour points by</label>
+@@ -268,7 +268,7 @@
+             </div>
+         </details>
+ 
+-        <details class="fold" open>
++        <details class="fold">
+             <summary>Trees</summary>
+             <div class="fold-body">
+                 <div class="ctrl">
+@@ -310,7 +310,52 @@
+             </div>
+         </details>
+ 
+-        <details class="fold" open>
++        <details class="fold">
 +            <summary>Parcels <span id="parcels-count" class="badge">0</span></summary>
 +            <div class="fold-body">
 +                <div class="ctrl">
@@ -51,9 +97,19 @@ index 6b8f66e..53f9cc3 100644
 +            </div>
 +        </details>
 +
-         <details class="fold" open>
++        <details class="fold">
              <summary>Surfaces</summary>
              <div class="fold-body">
+                 <div class="ctrl">
+@@ -343,7 +388,7 @@
+             </div>
+         </details>
+ 
+-        <details class="fold" open>
++        <details class="fold">
+             <summary>3D print (STL)</summary>
+             <div class="fold-body">
+                 <div class="ctrl">
 @@ -370,9 +415,10 @@
                      </select>
                      <label for="print-detail" class="control-label">Detail</label>
@@ -67,7 +123,7 @@ index 6b8f66e..53f9cc3 100644
                      </select>
                      <span class="control-label">Print area (LV95, max. 2000 × 2000 m – may cross tile borders)</span>
                      <label>Centre E <input id="print-ce" type="number" step="10"></label>
-@@ -395,9 +441,10 @@
+@@ -395,15 +441,16 @@
                      <button id="print-all-pos" type="button">Positive</button>
                      <button id="print-all-neg" type="button">Negative mould</button>
                      <div class="section-info">
@@ -81,6 +137,58 @@ index 6b8f66e..53f9cc3 100644
                      </div>
                  </div>
              </div>
+         </details>
+ 
+-        <details class="fold" open>
++        <details class="fold">
+             <summary>Light &amp; atmosphere</summary>
+             <div class="fold-body">
+                 <div class="ctrl">
+@@ -447,7 +494,7 @@
+             </div>
+         </details>
+ 
+-        <details class="fold" open>
++        <details class="fold">
+             <summary>Render image</summary>
+             <div class="fold-body">
+                 <div class="ctrl">
+@@ -473,7 +520,7 @@
+             </div>
+         </details>
+ 
+-        <details class="fold" open>
++        <details class="fold">
+             <summary>Appearance</summary>
+             <div class="fold-body">
+ 
+@@ -553,7 +600,7 @@
+             </div>
+         </details>
+ 
+-        <details class="fold" open>
++        <details class="fold">
+             <summary>Navigation</summary>
+             <div class="fold-body">
+                 <div class="ctrl">
+@@ -566,7 +613,7 @@
+             </div>
+         </details>
+ 
+-        <details class="fold" open>
++        <details class="fold">
+             <summary>Sections</summary>
+             <div class="fold-body">
+                 <div class="section-buttons">
+@@ -578,7 +625,7 @@
+             </div>
+         </details>
+ 
+-        <details class="fold" open>
++        <details class="fold">
+             <summary>Export (full resolution)</summary>
+             <div class="fold-body">
+                 <p class="hint">Reads every point of the COPC file, not just what is in view. Output is an uncompressed LAS 1.4 file (point format 7, with RGB) in LV95.</p>
 @@ -690,6 +737,7 @@
  <script src="./export.js"></script>
  <script src="./atmosphere.js"></script>
@@ -999,7 +1107,7 @@ index 0000000..eaf2778
 +    };
 +})();
 diff --git a/print.js b/print.js
-index 2de3707..765170e 100644
+index 2de3707..264f3b0 100644
 --- a/print.js
 +++ b/print.js
 @@ -9,9 +9,23 @@
@@ -1226,7 +1334,8 @@ index 2de3707..765170e 100644
 +            }
 +        }
 +    }
-+
+ 
+-        return new Float32Array(tris);
 +    /* Ear clipping of a simple polygon (2D); returns index triples. */
 +    function earClip(poly) {
 +        const n = poly.length;
@@ -1240,8 +1349,7 @@ index 2de3707..765170e 100644
 +        // strictly inside: points on an edge (straight runs of the outline) do not block an ear
 +        const inTri = (p, a, b, c) => cross(a, b, p) > EPS && cross(b, c, p) > EPS && cross(c, a, p) > EPS;
 +        const tris = [];
- 
--        return new Float32Array(tris);
++
 +        for (let guard = 0; idx.length > 3 && guard < n * n; guard++) {
 +            let clipped = false;
 +            for (let k = 0; k < idx.length; k++) {
@@ -1532,7 +1640,53 @@ index 2de3707..765170e 100644
      /* ============================================================
         Binary STL
         ============================================================ */
-@@ -258,7 +684,8 @@
+@@ -213,17 +639,45 @@
+         }
+     }
+ 
++    /*
++     * Terrain for the frame across tile borders: swissALTI3D at 2 m for the
++     * whole print area, loaded in the background (km tiles are cached).
++     * Returns the sampler once ready, else null and redraws when it is.
++     */
++    let frameTerrain = { key: "", sampler: null, loading: false };
++
++    function frameTerrainFor(b) {
++        const key = [b.minE, b.minN, b.maxE, b.maxN].map(Math.round).join(",");
++        if (frameTerrain.key === key) return frameTerrain.sampler;
++        frameTerrain = { key, sampler: null, loading: true };
++        if (typeof swissLoadAltiArea !== "function") return null;
++
++        swissLoadAltiArea(b, 2)
++            .then(sampler => {
++                if (frameTerrain.key !== key) return;            // the area moved meanwhile
++                frameTerrain.sampler = sampler;
++                drawOutline();
++            })
++            .catch(error => console.warn("[print] frame terrain:", error))
++            .finally(() => { if (frameTerrain.key === key) frameTerrain.loading = false; });
++        return null;
++    }
++
+     /* Frame in the 3D view. */
+     function drawOutline() {
+         if (outline) { outline.parent?.remove(outline); outline.geometry.dispose(); outline.material.dispose(); outline = null; }
+         if (!el("print-show")?.checked || !viewer?.scene?.scene || !Number.isFinite(area.cE)) return;
+ 
+         const b = bounds();
++        const frameTerrain = frameTerrainFor(b);
+         const height = (e, n) => {
+             const z = window.swissSurfaces?.terrainAt(e, n);
+             if (z === z && z !== undefined) return z;
+             const a = typeof swissAltiAt === "function" ? swissAltiAt(e, n) : NaN;
+             if (a === a) return a;
++            // outside the loaded tile: swissALTI3D 2 m of the neighbouring tiles
++            const f = frameTerrain?.at(e, n);
++            if (f === f && f !== undefined) return f;
+             try { return viewer.scene.view.getPivot().z; } catch (error) { return 0; }
+         };
+ 
+@@ -258,7 +712,8 @@
          const b = bounds();
          const tiles = (Math.floor((b.maxE - 1e-6) / 1000) - Math.floor(b.minE / 1000) + 1) * (Math.floor((b.maxN - 1e-6) / 1000) - Math.floor(b.minN / 1000) + 1);
          box.textContent = `Print size: ${Math.round(area.w * 1000 / scale)} × ${Math.round(area.h * 1000 / scale)} mm ` +
@@ -1542,7 +1696,7 @@ index 2de3707..765170e 100644
      }
  
      function update() {
-@@ -276,10 +703,34 @@
+@@ -276,10 +731,34 @@
              scale: Number(el("print-scale")?.value || 2000),
              exaggeration: Number(el("print-exag")?.value || 1),
              base: Number(el("print-base")?.value || 5),
@@ -1578,7 +1732,7 @@ index 2de3707..765170e 100644
      let busy = false;
  
      async function exportPrint(withBuildings, negative) {
-@@ -292,43 +743,90 @@
+@@ -292,43 +771,90 @@
          const b = bounds();
  
          try {
@@ -1648,11 +1802,9 @@ index 2de3707..765170e 100644
 +                } catch (error) {
 +                    console.warn("[print] exact model failed, falling back:", error);
 +                    buildingNote = ` (exact geometry failed: ${error.message})`;
-                 }
--                buildingNote = `, ${(B.triangles.length / 9).toLocaleString()} building faces`;
-             }
- 
--            const result = printSolid({ nx, ny, cell, z }, { ...o, negative });
++                }
++            }
++
 +            if (!result) {
 +                if (withBuildings && negative) {
 +                    // fallback: a mould from one height raster, buildings at 0.25 m
@@ -1679,16 +1831,18 @@ index 2de3707..765170e 100644
 +                    result.triangles = concat([result.triangles, bt.triangles]);
 +                    result.size[2] = Math.max(result.size[2], bt.top);
 +                    buildingNote += `, ${(bt.triangles.length / 9).toLocaleString()} original building faces as separate shells`;
-+                }
-+            }
-+
+                 }
+-                buildingNote = `, ${(B.triangles.length / 9).toLocaleString()} building faces`;
+             }
+ 
+-            const result = printSolid({ nx, ny, cell, z }, { ...o, negative });
 +            setStatus("Writing STL…");
 +            await new Promise(r => setTimeout(r, 0));
 +
              const label = `${withBuildings ? "terrain+buildings" : "terrain"}_${negative ? "negative-mould" : "positive"}_1-${o.scale}` +
                  (o.exaggeration !== 1 ? `_x${o.exaggeration}` : "");
  
-@@ -343,7 +841,7 @@
+@@ -343,7 +869,7 @@
              window.usageCounter?.hit("downloads");
              setStatus(
                  `STL saved: ${result.size.map(v => Math.round(v)).join(" × ")} mm, ` +
@@ -1697,7 +1851,7 @@ index 2de3707..765170e 100644
                  (terrain.missing ? ` – ${terrain.missing} tile(s) without terrain` : "") +
                  (negative ? " (mould: mirrored, pour and turn over)." : ".")
              );
-@@ -390,5 +888,5 @@
+@@ -390,5 +916,5 @@
          el("surf-build")?.addEventListener("click", () => setTimeout(() => { if (!Number.isFinite(area.cE)) defaultArea(); syncInputs(); update(); }, 1500));
      });
  

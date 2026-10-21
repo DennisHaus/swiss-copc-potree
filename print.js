@@ -639,17 +639,45 @@
         }
     }
 
+    /*
+     * Terrain for the frame across tile borders: swissALTI3D at 2 m for the
+     * whole print area, loaded in the background (km tiles are cached).
+     * Returns the sampler once ready, else null and redraws when it is.
+     */
+    let frameTerrain = { key: "", sampler: null, loading: false };
+
+    function frameTerrainFor(b) {
+        const key = [b.minE, b.minN, b.maxE, b.maxN].map(Math.round).join(",");
+        if (frameTerrain.key === key) return frameTerrain.sampler;
+        frameTerrain = { key, sampler: null, loading: true };
+        if (typeof swissLoadAltiArea !== "function") return null;
+
+        swissLoadAltiArea(b, 2)
+            .then(sampler => {
+                if (frameTerrain.key !== key) return;            // the area moved meanwhile
+                frameTerrain.sampler = sampler;
+                drawOutline();
+            })
+            .catch(error => console.warn("[print] frame terrain:", error))
+            .finally(() => { if (frameTerrain.key === key) frameTerrain.loading = false; });
+        return null;
+    }
+
     /* Frame in the 3D view. */
     function drawOutline() {
         if (outline) { outline.parent?.remove(outline); outline.geometry.dispose(); outline.material.dispose(); outline = null; }
         if (!el("print-show")?.checked || !viewer?.scene?.scene || !Number.isFinite(area.cE)) return;
 
         const b = bounds();
+        const frameTerrain = frameTerrainFor(b);
         const height = (e, n) => {
             const z = window.swissSurfaces?.terrainAt(e, n);
             if (z === z && z !== undefined) return z;
             const a = typeof swissAltiAt === "function" ? swissAltiAt(e, n) : NaN;
             if (a === a) return a;
+            // outside the loaded tile: swissALTI3D 2 m of the neighbouring tiles
+            const f = frameTerrain?.at(e, n);
+            if (f === f && f !== undefined) return f;
             try { return viewer.scene.view.getPivot().z; } catch (error) { return 0; }
         };
 

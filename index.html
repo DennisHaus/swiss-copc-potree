@@ -415,9 +415,10 @@
                     </select>
                     <label for="print-detail" class="control-label">Detail</label>
                     <select id="print-detail">
+                        <option value="auto" selected>Auto (about 0.2 mm on the print)</option>
+                        <option value="full">Full swissALTI3D (0.5 m, large file)</option>
+                        <option value="500">Medium (500 cells per side)</option>
                         <option value="300">Coarse (300 cells per side)</option>
-                        <option value="500" selected>Medium (500)</option>
-                        <option value="800">Fine (800, large file)</option>
                     </select>
                     <span class="control-label">Print area (LV95, max. 2000 × 2000 m – may cross tile borders)</span>
                     <label>Centre E <input id="print-ce" type="number" step="10"></label>
@@ -440,9 +441,10 @@
                     <button id="print-all-pos" type="button">Positive</button>
                     <button id="print-all-neg" type="button">Negative mould</button>
                     <div class="section-info">
-                        Closed solids in millimetres from swissALTI3D and swissBUILDINGS3D, loaded for the print
-                        area itself. The mould is mirrored and has a rim: pour into it and turn the cast over.
-                        Roof overhangs become vertical (printable without supports).
+                        Closed solids in millimetres at the chosen scale, loaded for the print area itself:
+                        terrain from swissALTI3D, buildings with their original swissBUILDINGS3D faces, exactly as in
+                        the 3D view – in the positive and in the mould. The mould is mirrored and has a rim: pour into
+                        it and turn the cast over.
                     </div>
                 </div>
             </div>

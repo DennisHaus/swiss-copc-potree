@@ -1,0 +1,1723 @@
+diff --git a/index.html b/index.html
+index 6b8f66e..53f9cc3 100644
+--- a/index.html
++++ b/index.html
+@@ -310,6 +310,51 @@
+             </div>
+         </details>
+ 
++        <details class="fold" open>
++            <summary>Parcels <span id="parcels-count" class="badge">0</span></summary>
++            <div class="fold-body">
++                <div class="ctrl">
++                    <div class="search-row">
++                        <input id="parcels-search" type="text" placeholder="Parcel (e.g. Köniz 1234) or address" autocomplete="off">
++                        <button id="parcels-search-button" type="button">Find</button>
++                    </div>
++                    <div id="parcels-results"></div>
++                    <button id="parcels-pick" type="button">Pick a parcel on the map</button>
++                </div>
++                <div class="ctrl two">
++                    <button id="parcels-tile" type="button" disabled>All in this tile</button>
++                    <button id="parcels-view" type="button">All in map view</button>
++                </div>
++                <div class="ctrl">
++                    <label><input id="parcels-proj" type="checkbox"> Include projected parcels (in mutation)</label>
++                    <label><input id="parcels-sdr" type="checkbox"> Include building rights (SDR)</label>
++                    <label><input id="parcels-show-map" type="checkbox" checked> Show on map</label>
++                    <label><input id="parcels-show-3d" type="checkbox" checked> Show in 3D (on swissALTI3D)</label>
++                </div>
++                <div id="parcels-list"></div>
++                <div class="ctrl two">
++                    <button id="parcels-select-all" type="button" disabled>Select all</button>
++                    <button id="parcels-select-none" type="button" disabled>Select none</button>
++                </div>
++                <div class="ctrl">
++                    <label><input id="parcels-dxf-3d" type="checkbox"> DXF draped on terrain (3D polylines)</label>
++                    <label><input id="parcels-dxf-local" type="checkbox"> DXF with local origin (for Rhino)</label>
++                </div>
++                <div class="ctrl">
++                    <button id="parcels-dxf" type="button" disabled>DXF</button>
++                    <button id="parcels-geojson" type="button" disabled>GeoJSON</button>
++                    <button id="parcels-csv" type="button" disabled>CSV (WKT)</button>
++                    <button id="parcels-clear" type="button" disabled>Clear</button>
++                    <div id="parcels-export-scope" class="section-info"></div>
++                </div>
++                <div id="parcels-info" class="section-info">
++                    Parcel boundaries of the cadastral survey (amtliche Vermessung) from geodienste.ch, in LV95.
++                    Open data in most cantons; JU, LU, NE, NW, OW and VD release vector data only with a contract.
++                    Not legally binding.
++                </div>
++            </div>
++        </details>
++
+         <details class="fold" open>
+             <summary>Surfaces</summary>
+             <div class="fold-body">
+@@ -370,9 +415,10 @@
+                     </select>
+                     <label for="print-detail" class="control-label">Detail</label>
+                     <select id="print-detail">
++                        <option value="auto" selected>Auto (about 0.2 mm on the print)</option>
++                        <option value="full">Full swissALTI3D (0.5 m, large file)</option>
++                        <option value="500">Medium (500 cells per side)</option>
+                         <option value="300">Coarse (300 cells per side)</option>
+-                        <option value="500" selected>Medium (500)</option>
+-                        <option value="800">Fine (800, large file)</option>
+                     </select>
+                     <span class="control-label">Print area (LV95, max. 2000 × 2000 m – may cross tile borders)</span>
+                     <label>Centre E <input id="print-ce" type="number" step="10"></label>
+@@ -395,9 +441,10 @@
+                     <button id="print-all-pos" type="button">Positive</button>
+                     <button id="print-all-neg" type="button">Negative mould</button>
+                     <div class="section-info">
+-                        Closed solids in millimetres from swissALTI3D and swissBUILDINGS3D, loaded for the print
+-                        area itself. The mould is mirrored and has a rim: pour into it and turn the cast over.
+-                        Roof overhangs become vertical (printable without supports).
++                        Closed solids in millimetres at the chosen scale, loaded for the print area itself:
++                        terrain from swissALTI3D, buildings with their original swissBUILDINGS3D faces, exactly as in
++                        the 3D view – in the positive and in the mould. The mould is mirrored and has a rim: pour into
++                        it and turn the cast over.
+                     </div>
+                 </div>
+             </div>
+@@ -690,6 +737,7 @@
+ <script src="./export.js"></script>
+ <script src="./atmosphere.js"></script>
+ <script src="./trees.js"></script>
++<script src="./parcels.js"></script>
+ <script src="./buildings3d.js"></script>
+ <script src="./surfaces.js"></script>
+ <script src="./figures.js"></script>
+diff --git a/parcels.js b/parcels.js
+new file mode 100644
+index 0000000..eaf2778
+--- /dev/null
++++ b/parcels.js
+@@ -0,0 +1,903 @@
++/*
++ * Swiss LiDAR Viewer - parcel boundaries (Liegenschaften, amtliche Vermessung)
++ *
++ * Source: geodienste.ch, the cantons' aggregation of the cadastral survey
++ * (MGDM DM.01-AV-CH), via OGC API Features "AV: Standard":
++ *
++ *   https://geodienste.ch/db/av_0/deu/ogcapi/collections/<id>/items
++ *
++ *   RESF       legally valid parcels (Liegenschaften)
++ *   RESFPROJ   projected parcels (in mutation)
++ *   DPRSF      distinct and permanent rights (SDR, Baurechte) and mines
++ *   DPRSFPROJ  projected SDR
++ *
++ * Requested directly in LV95 (crs / bbox-crs = EPSG:2056), as GeoJSON.
++ * Fallback: the geo.admin.ch identify service on the cadastral web map.
++ *
++ * Open data in most cantons. JU, LU, NE, NW, OW and VD require a contract for
++ * vector data, so anonymous requests there return nothing.
++ *
++ * Finding parcels: parcel number or address (geo.admin.ch search, origin
++ * "parcel"), a click on the map, the current tile, or the map view.
++ *
++ * Display: Leaflet polygons (click to select) and, optionally, boundary lines
++ * draped on swissALTI3D in the 3D view.
++ *
++ * Export (selected parcels, or all loaded): GeoJSON, DXF (2D or draped 3D,
++ * absolute LV95 or local origin), CSV with WKT. Coordinates are LV95.
++ *
++ * Not legally binding: only an extract from the cantonal cadastral survey is.
++ */
++
++(function () {
++    "use strict";
++
++    const AV_OGC = "https://geodienste.ch/db/av_0/deu/ogcapi";
++    const CRS_2056 = "http://www.opengis.net/def/crs/EPSG/0/2056";
++    const IDENTIFY_URL = "https://api3.geo.admin.ch/rest/services/ech/MapServer/identify";
++    const FALLBACK_LAYER = "ch.kantone.cadastralwebmap-farbe";
++    const RESTRICTED_CANTONS = "JU, LU, NE, NW, OW, VD";
++
++    const KINDS = {
++        RESF:      { label: "Parcel",            dxf: "AV_PARZELLE",      aci: 1, color: "#d62828", dash: null },
++        RESFPROJ:  { label: "Projected parcel",  dxf: "AV_PARZELLE_PROJ", aci: 30, color: "#f77f00", dash: "6 4" },
++        DPRSF:     { label: "Right (SDR)",       dxf: "AV_SDR",           aci: 6, color: "#7b2cbf", dash: "2 4" },
++        DPRSFPROJ: { label: "Projected right",   dxf: "AV_SDR_PROJ",      aci: 200, color: "#b185db", dash: "2 4" }
++    };
++
++    const MAX_AREA_M2 = 4e6;          // largest box loaded at once (2 km x 2 km)
++    const PAGE_LIMIT = 500;
++    const DRAPE_STEP = 2;             // m between draped vertices
++    const DRAPE_LIFT = 0.3;           // m above the terrain in 3D
++
++    const state = {
++        parcels: new Map(),           // key -> parcel
++        layer: null,                  // Leaflet layer group
++        group3d: null,                // THREE group
++        busy: false,
++        picking: false,
++        pickHandler: null,
++        abort: null,
++        source: ""
++    };
++
++    const el = id => document.getElementById(id);
++
++    function setInfo(text) {
++        const info = el("parcels-info");
++        if (info) info.textContent = text;
++    }
++
++    /* ============================================================
++       GEOMETRY (pure)
++       ============================================================ */
++
++    /* Coordinates to LV95 [E, N], whatever the server sent. */
++    function toLV95([a, b]) {
++        if (a > 2e6 && b > 1e6 && b < 2e6) return [a, b];               // E, N
++        if (b > 2e6 && a > 1e6 && a < 2e6) return [b, a];               // N, E
++        if (Math.abs(a) <= 180 && Math.abs(b) <= 90) {                  // lon, lat
++            const lonLat = a > 20 ? [b, a] : [a, b];                     // lat, lon
++            return proj4("EPSG:4326", "EPSG:2056", lonLat);
++        }
++        return [a, b];
++    }
++
++    /* GeoJSON geometry -> [[outer, hole, ...], ...] in LV95, rings open. */
++    function polygonsOf(geometry) {
++        if (!geometry) return [];
++        const open = ring => {
++            const r = ring.map(toLV95);
++            const f = r[0], l = r[r.length - 1];
++            if (r.length > 1 && f[0] === l[0] && f[1] === l[1]) r.pop();
++            return r;
++        };
++        if (geometry.type === "Polygon") return [geometry.coordinates.map(open)];
++        if (geometry.type === "MultiPolygon") return geometry.coordinates.map(p => p.map(open));
++        if (geometry.type === "GeometryCollection") return (geometry.geometries || []).flatMap(polygonsOf);
++        // ESRI JSON (identify without geometryFormat=geojson)
++        if (Array.isArray(geometry.rings)) return geometry.rings.map(r => [open(r)]);
++        return [];
++    }
++
++    function ringArea(ring) {
++        let s = 0;
++        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
++            s += (ring[j][0] - ring[i][0]) * (ring[j][1] + ring[i][1]);
++        }
++        return s / 2;
++    }
++
++    function ringLength(ring) {
++        let s = 0;
++        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
++            s += Math.hypot(ring[i][0] - ring[j][0], ring[i][1] - ring[j][1]);
++        }
++        return s;
++    }
++
++    function polygonsArea(polys) {
++        return polys.reduce((sum, rings) =>
++            sum + Math.abs(ringArea(rings[0])) - rings.slice(1).reduce((h, r) => h + Math.abs(ringArea(r)), 0), 0);
++    }
++
++    function insideRing(ring, e, n) {
++        let inside = false;
++        for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
++            const [xi, yi] = ring[i], [xj, yj] = ring[j];
++            if ((yi > n) !== (yj > n) && e < (xj - xi) * (n - yi) / (yj - yi) + xi) inside = !inside;
++        }
++        return inside;
++    }
++
++    function containsPoint(polys, e, n) {
++        return polys.some(rings => insideRing(rings[0], e, n) && !rings.slice(1).some(h => insideRing(h, e, n)));
++    }
++
++    /* A label point inside the largest polygon (centroid, or a scanline midpoint). */
++    function labelPoint(polys) {
++        let best = null, bestA = -1;
++        for (const rings of polys) {
++            const a = Math.abs(ringArea(rings[0]));
++            if (a > bestA) { bestA = a; best = rings; }
++        }
++        if (!best) return null;
++
++        const outer = best[0];
++        let cx = 0, cy = 0, a6 = 0;
++        for (let i = 0, j = outer.length - 1; i < outer.length; j = i++) {
++            const f = outer[j][0] * outer[i][1] - outer[i][0] * outer[j][1];
++            cx += (outer[j][0] + outer[i][0]) * f;
++            cy += (outer[j][1] + outer[i][1]) * f;
++            a6 += f * 3;
++        }
++        if (a6 !== 0) {
++            const c = [cx / a6, cy / a6];
++            if (containsPoint([best], c[0], c[1])) return c;
++        }
++
++        // scanline through the vertical middle: midpoint of the widest span
++        const ys = outer.map(p => p[1]);
++        const y = (Math.min(...ys) + Math.max(...ys)) / 2;
++        const xs = [];
++        for (const ring of best) {
++            for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
++                const [xi, yi] = ring[i], [xj, yj] = ring[j];
++                if ((yi > y) !== (yj > y)) xs.push(xi + (y - yi) * (xj - xi) / (yj - yi));
++            }
++        }
++        xs.sort((p, q) => p - q);
++        let span = null;
++        for (let i = 0; i + 1 < xs.length; i += 2) {
++            if (!span || xs[i + 1] - xs[i] > span[1] - span[0]) span = [xs[i], xs[i + 1]];
++        }
++        return span ? [(span[0] + span[1]) / 2, y] : outer[0];
++    }
++
++    /* Ring -> closed vertex list with extra vertices every `step` m. */
++    function densify(ring, step) {
++        const out = [];
++        for (let i = 0; i < ring.length; i++) {
++            const a = ring[i], b = ring[(i + 1) % ring.length];
++            const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1]) / step));
++            for (let k = 0; k < n; k++) out.push([a[0] + (b[0] - a[0]) * k / n, a[1] + (b[1] - a[1]) * k / n]);
++        }
++        out.push(out[0]);
++        return out;
++    }
++
++    /* ============================================================
++       ATTRIBUTES
++       ============================================================ */
++
++    function pick(props, names) {
++        const keys = Object.keys(props || {});
++        for (const name of names) {
++            const key = keys.find(k => k.toLowerCase() === name);
++            if (key && props[key] !== null && props[key] !== "") return String(props[key]);
++        }
++        return "";
++    }
++
++    function makeParcel(feature, kind) {
++        const props = feature.properties || feature.attributes || {};
++        const polygons = polygonsOf(feature.geometry);
++        if (!polygons.length) return null;
++
++        const number = pick(props, ["number", "nummer", "numero", "label", "parcel_number", "parzellennummer"]);
++        const egrid = pick(props, ["egris_egrid", "egrid", "egris_egrid_txt"]);
++        const nbident = pick(props, ["identnd", "nbident", "ident_nd"]);
++        const bfs = pick(props, ["bfsnr", "bfs_nr", "fosnr", "gemeinde_bfs", "bfs"]);
++        const canton = pick(props, ["kanton", "canton", "ak"]);
++
++        const first = polygons[0][0][0];
++        const key = `${kind}|${egrid || `${nbident}|${number}|${bfs}` || feature.id || ""}|${first[0].toFixed(2)},${first[1].toFixed(2)}`;
++
++        const area = polygonsArea(polygons);
++
++        return {
++            key, kind, number, egrid, nbident, bfs, canton, props, polygons,
++            area,
++            perimeter: polygons.reduce((s, rings) => s + rings.reduce((t, r) => t + ringLength(r), 0), 0),
++            label: labelPoint(polygons),
++            selected: false
++        };
++    }
++
++    function title(p) {
++        return p.number ? `${KINDS[p.kind]?.label || p.kind} ${p.number}` : (KINDS[p.kind]?.label || p.kind);
++    }
++
++    /* ============================================================
++       LOADING
++       ============================================================ */
++
++    class AccessError extends Error {}
++
++    async function fetchOgc(kind, box, signal) {
++        let url = new URL(`${AV_OGC}/collections/${kind}/items`);
++        url.searchParams.set("f", "json");
++        url.searchParams.set("limit", String(PAGE_LIMIT));
++        url.searchParams.set("bbox", [box.minE, box.minN, box.maxE, box.maxN].map(v => v.toFixed(2)).join(","));
++        url.searchParams.set("bbox-crs", CRS_2056);
++        url.searchParams.set("crs", CRS_2056);
++
++        const features = [];
++
++        for (let page = 0; url && page < 40; page++) {
++            const response = await fetch(url, { signal, headers: { Accept: "application/geo+json, application/json" } });
++
++            if (response.status === 401 || response.status === 403) {
++                throw new AccessError(`geodienste.ch refused access (${response.status})`);
++            }
++            if (!response.ok) throw new Error(`geodienste.ch ${kind}: HTTP ${response.status}`);
++
++            const data = await response.json();
++            const batch = data.features || [];
++            features.push(...batch);
++
++            const next = (data.links || []).find(l => l.rel === "next");
++            url = next && batch.length ? new URL(next.href, url) : null;
++
++            setInfo(`Loading ${KINDS[kind].label.toLowerCase()}s… ${features.length}`);
++        }
++
++        return features;
++    }
++
++    /* geo.admin.ch identify on the cadastral web map (parcels only). */
++    async function fetchIdentify(box, signal) {
++        const url = new URL(IDENTIFY_URL);
++        const extent = [box.minE, box.minN, box.maxE, box.maxN].join(",");
++        const params = {
++            geometry: extent,
++            geometryType: "esriGeometryEnvelope",
++            layers: `all:${FALLBACK_LAYER}`,
++            mapExtent: extent,
++            imageDisplay: "1000,1000,96",
++            tolerance: "0",
++            sr: "2056",
++            returnGeometry: "true",
++            geometryFormat: "geojson",
++            limit: "200"
++        };
++        for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
++
++        const response = await fetch(url, { signal });
++        if (!response.ok) throw new Error(`geo.admin.ch identify: HTTP ${response.status}`);
++        return ((await response.json()).results || []).filter(f => f.geometry);
++    }
++
++    function wantedKinds() {
++        const kinds = ["RESF"];
++        if (el("parcels-proj")?.checked) kinds.push("RESFPROJ");
++        if (el("parcels-sdr")?.checked) kinds.push("DPRSF", ...(el("parcels-proj")?.checked ? ["DPRSFPROJ"] : []));
++        return kinds;
++    }
++
++    /* Loads all parcels touching box. Returns the parcels of this request. */
++    async function loadBox(box) {
++        const area = (box.maxE - box.minE) * (box.maxN - box.minN);
++        if (area > MAX_AREA_M2) {
++            throw new Error(`Area too large (${(area / 1e6).toFixed(1)} km²). Zoom in to 2 km × 2 km or less.`);
++        }
++
++        state.abort?.abort();
++        state.abort = new AbortController();
++        const signal = state.abort.signal;
++
++        const found = [];
++        let viaOgc = true;
++
++        try {
++            for (const kind of wantedKinds()) {
++                for (const f of await fetchOgc(kind, box, signal)) {
++                    const p = makeParcel(f, kind);
++                    if (p) found.push(p);
++                }
++            }
++            state.source = "geodienste.ch (AV, OGC API Features)";
++        } catch (error) {
++            if (error.name === "AbortError") throw error;
++            console.warn("[parcels] geodienste.ch failed, trying geo.admin.ch:", error);
++            viaOgc = false;
++
++            const features = await fetchIdentify(box, signal);
++            for (const f of features) {
++                const p = makeParcel(f, "RESF");
++                if (p) found.push(p);
++            }
++            state.source = "geo.admin.ch identify (cadastral web map)";
++
++            if (!found.length) {
++                throw new Error(error instanceof AccessError
++                    ? `No access to the parcel data here. Cantons ${RESTRICTED_CANTONS} release vector data only with a contract.`
++                    : `Could not load parcels (${error.message}).`);
++            }
++        }
++
++        const added = [];
++        for (const p of found) {
++            if (!state.parcels.has(p.key)) {
++                state.parcels.set(p.key, p);
++                added.push(p);
++            } else {
++                added.push(state.parcels.get(p.key));
++            }
++        }
++
++        if (!found.length && viaOgc) {
++            setInfo(`No parcels returned for this area. If it lies in ${RESTRICTED_CANTONS}, the canton releases vector data only with a contract.`);
++        }
++
++        return added;
++    }
++
++    function tileBox() {
++        if (!currentTile || typeof swissTileExtentLV95 !== "function") return null;
++        return swissTileExtentLV95(0);
++    }
++
++    function mapBox() {
++        if (!map) return null;
++        const b = map.getBounds();
++        const corners = [b.getSouthWest(), b.getNorthWest(), b.getNorthEast(), b.getSouthEast()]
++            .map(c => proj4("EPSG:4326", "EPSG:2056", [c.lng, c.lat]));
++        return {
++            minE: Math.min(...corners.map(c => c[0])), maxE: Math.max(...corners.map(c => c[0])),
++            minN: Math.min(...corners.map(c => c[1])), maxN: Math.max(...corners.map(c => c[1]))
++        };
++    }
++
++    async function run(label, task) {
++        if (state.busy) return;
++        state.busy = true;
++        updateButtons();
++        setInfo(label);
++        try {
++            await task();
++        } catch (error) {
++            if (error.name !== "AbortError") {
++                console.error("[parcels]", error);
++                setInfo(error.message);
++            }
++        } finally {
++            state.busy = false;
++            updateButtons();
++        }
++    }
++
++    function loadArea(which) {
++        run("Loading parcels…", async () => {
++            const box = which === "tile" ? tileBox() : mapBox();
++            if (!box) throw new Error(which === "tile" ? "Select a tile first." : "The map is not ready.");
++            const parcels = await loadBox(box);
++            refresh();
++            if (parcels.length) setInfo(`${parcels.length} parcel(s) loaded from ${state.source}. Click parcels on the map to select them for export.`);
++        });
++    }
++
++    /* Parcel(s) at one LV95 point: loads a small box and selects what contains it. */
++    function loadAtPoint(e, n, zoom = true) {
++        return run("Looking up the parcel…", async () => {
++            const parcels = await loadBox({ minE: e - 5, minN: n - 5, maxE: e + 5, maxN: n + 5 });
++            const hits = parcels.filter(p => containsPoint(p.polygons, e, n));
++
++            if (!hits.length) {
++                refresh();
++                if (parcels.length) setInfo("No parcel contains this point exactly; the neighbours were loaded.");
++                return;
++            }
++
++            for (const p of hits) p.selected = true;
++            refresh();
++
++            if (zoom && map && state.layer) {
++                const bounds = L.latLngBounds(hits.flatMap(p => p.polygons[0][0].map(lv95ToLatLng)));
++                map.fitBounds(bounds.pad(0.6), { maxZoom: 19 });
++            }
++
++            setInfo(hits.map(p => `${title(p)}${p.egrid ? ` (${p.egrid})` : ""}, ${Math.round(p.area)} m²`).join("; ") + " selected.");
++        });
++    }
++
++    /* ============================================================
++       SEARCH (geo.admin.ch, parcels and addresses)
++       ============================================================ */
++
++    async function search() {
++        const query = el("parcels-search")?.value.trim();
++        const list = el("parcels-results");
++        if (!query || !list) return;
++
++        list.innerHTML = "";
++        setInfo(`Searching ${query}…`);
++
++        try {
++            const url = new URL(CONFIG.SEARCH_URL || "https://api3.geo.admin.ch/rest/services/ech/SearchServer");
++            url.searchParams.set("searchText", query);
++            url.searchParams.set("type", "locations");
++            url.searchParams.set("origins", "parcel,address");
++            url.searchParams.set("sr", "2056");
++            url.searchParams.set("limit", "12");
++
++            const response = await fetch(url);
++            if (!response.ok) throw new Error(`search failed (${response.status})`);
++            const results = (await response.json()).results || [];
++
++            // parcels first
++            results.sort((a, b) => (a.attrs?.origin === "parcel" ? 0 : 1) - (b.attrs?.origin === "parcel" ? 0 : 1));
++
++            for (const r of results) {
++                const attrs = r.attrs || {};
++                const lat = Number(attrs.lat), lon = Number(attrs.lon);
++                if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
++
++                const button = document.createElement("button");
++                button.type = "button";
++                button.className = "search-result";
++                button.textContent = `${attrs.origin === "parcel" ? "Parcel" : "Address"}: ${String(attrs.label || "").replace(/<[^>]*>/g, "").trim()}`;
++                button.addEventListener("click", () => {
++                    const [e, n] = proj4("EPSG:4326", "EPSG:2056", [lon, lat]);
++                    loadAtPoint(e, n);
++                });
++                list.appendChild(button);
++            }
++
++            setInfo(list.children.length
++                ? "Choose a result to load and select its parcel."
++                : "Nothing found. Try “municipality number”, e.g. “Köniz 1234”, or an address.");
++        } catch (error) {
++            setInfo(`Search failed: ${error.message}`);
++        }
++    }
++
++    function togglePick() {
++        if (!map) return;
++        state.picking = !state.picking;
++        const button = el("parcels-pick");
++        if (button) button.textContent = state.picking ? "Click a parcel on the map… (cancel)" : "Pick a parcel on the map";
++        map.getContainer().style.cursor = state.picking ? "crosshair" : "";
++
++        if (state.picking) {
++            state.pickHandler = event => {
++                state.picking = false;
++                state.pickHandler = null;
++                if (button) button.textContent = "Pick a parcel on the map";
++                map.getContainer().style.cursor = "";
++                const [e, n] = proj4("EPSG:4326", "EPSG:2056", [event.latlng.lng, event.latlng.lat]);
++                loadAtPoint(e, n, false);
++            };
++            map.once("click", state.pickHandler);
++        } else if (state.pickHandler) {
++            map.off("click", state.pickHandler);     // only ours, not the app's handlers
++            state.pickHandler = null;
++        }
++    }
++
++    /* ============================================================
++       DISPLAY: map
++       ============================================================ */
++
++    function lv95ToLatLng([e, n]) {
++        const [lon, lat] = proj4("EPSG:2056", "EPSG:4326", [e, n]);
++        return [lat, lon];
++    }
++
++    function styleFor(p) {
++        const k = KINDS[p.kind] || KINDS.RESF;
++        return {
++            color: k.color,
++            weight: p.selected ? 3 : 1.5,
++            dashArray: k.dash,
++            fillColor: k.color,
++            fillOpacity: p.selected ? 0.28 : 0.04
++        };
++    }
++
++    function drawMap() {
++        if (!map || typeof L === "undefined") return;
++
++        if (!state.layer) state.layer = L.layerGroup().addTo(map);
++        state.layer.clearLayers();
++        if (el("parcels-show-map") && !el("parcels-show-map").checked) return;
++
++        for (const p of state.parcels.values()) {
++            const latlngs = p.polygons.map(rings => rings.map(r => r.map(lv95ToLatLng)));
++            const poly = L.polygon(latlngs, styleFor(p));
++            poly.bindTooltip(`${title(p)}${p.egrid ? `<br>${p.egrid}` : ""}<br>${Math.round(p.area)} m²`, { sticky: true });
++            poly.on("click", event => {
++                if (state.picking) return;
++                L.DomEvent.stopPropagation(event);
++                p.selected = !p.selected;
++                poly.setStyle(styleFor(p));
++                renderList();
++                draw3d();
++            });
++            poly.addTo(state.layer);
++        }
++    }
++
++    /* ============================================================
++       DISPLAY: 3D (boundary lines on swissALTI3D)
++       ============================================================ */
++
++    function worldOffset(extent) {
++        try {
++            const box = currentPointCloud?.boundingBox?.clone();
++            if (!box) return [0, 0];
++            if (currentPointCloud.matrixWorld && !currentPointCloud.isLaz) box.applyMatrix4(currentPointCloud.matrixWorld);
++            const dx = box.min.x - extent.minE, dy = box.min.y - extent.minN;
++            if (Math.abs(dx) > 100000 || Math.abs(dy) > 100000) return [dx, dy];
++        } catch (error) { /* keep LV95 */ }
++        return [0, 0];
++    }
++
++    function terrainKey() {
++        return currentTile && typeof tileKey === "function" ? tileKey(currentTile, 0) : null;
++    }
++
++    function zAt(e, n) {
++        return typeof swissAltiAt === "function" ? swissAltiAt(e, n, terrainKey()) : NaN;
++    }
++
++    function clear3d() {
++        if (!state.group3d) return;
++        state.group3d.parent?.remove(state.group3d);
++        state.group3d.traverse(o => { o.geometry?.dispose?.(); o.material?.dispose?.(); });
++        state.group3d = null;
++        window.ATMO?.invalidate?.();
++    }
++
++    async function draw3d() {
++        clear3d();
++        if (!el("parcels-show-3d")?.checked || !state.parcels.size) return;
++        if (typeof viewer === "undefined" || !viewer || !currentTile || typeof THREE === "undefined") return;
++
++        try {
++            if (typeof swissEnsureAlti === "function") await swissEnsureAlti();
++        } catch (error) {
++            setInfo("3D view needs swissALTI3D for this tile, which could not be loaded.");
++            return;
++        }
++
++        const extent = swissTileExtentLV95(0);
++        const [dx, dy] = worldOffset(extent);
++        const group = new THREE.Group();
++        group.name = "parcels";
++
++        for (const p of state.parcels.values()) {
++            const positions = [];
++            for (const rings of p.polygons) {
++                for (const ring of rings) {
++                    const pts = densify(ring, DRAPE_STEP);
++                    for (let i = 0; i + 1 < pts.length; i++) {
++                        const za = zAt(pts[i][0], pts[i][1]), zb = zAt(pts[i + 1][0], pts[i + 1][1]);
++                        if (!(za === za && zb === zb)) continue;          // outside the terrain
++                        positions.push(pts[i][0] + dx, pts[i][1] + dy, za + DRAPE_LIFT,
++                            pts[i + 1][0] + dx, pts[i + 1][1] + dy, zb + DRAPE_LIFT);
++                    }
++                }
++            }
++            if (!positions.length) continue;
++
++            const geometry = new THREE.BufferGeometry();
++            const attr = new THREE.Float32BufferAttribute(positions, 3);
++            if (typeof geometry.setAttribute === "function") geometry.setAttribute("position", attr);
++            else geometry.addAttribute("position", attr);
++
++            const material = new THREE.LineBasicMaterial({
++                color: new THREE.Color(KINDS[p.kind]?.color || "#d62828"),
++                transparent: true,
++                opacity: p.selected ? 1 : 0.55,
++                depthTest: true
++            });
++            const lines = new THREE.LineSegments(geometry, material);
++            lines.renderOrder = 10;
++            group.add(lines);
++        }
++
++        state.group3d = group;
++        viewer.scene.scene.add(group);
++        window.ATMO?.invalidate?.();
++    }
++
++    /* ============================================================
++       LIST
++       ============================================================ */
++
++    function sorted() {
++        return [...state.parcels.values()].sort((a, b) =>
++            (b.selected - a.selected) || a.kind.localeCompare(b.kind) ||
++            a.number.localeCompare(b.number, undefined, { numeric: true }));
++    }
++
++    function renderList() {
++        const list = el("parcels-list");
++        if (!list) return;
++        list.innerHTML = "";
++
++        for (const p of sorted().slice(0, 300)) {
++            const row = document.createElement("label");
++            row.className = "parcels-row";
++            const box = document.createElement("input");
++            box.type = "checkbox";
++            box.checked = p.selected;
++            box.addEventListener("change", () => {
++                p.selected = box.checked;
++                drawMap();
++                draw3d();
++                updateButtons();
++            });
++            const text = document.createElement("span");
++            text.textContent = `${title(p)} · ${Math.round(p.area).toLocaleString("de-CH")} m²${p.egrid ? ` · ${p.egrid}` : ""}`;
++            row.append(box, text);
++            list.appendChild(row);
++        }
++
++        if (state.parcels.size > 300) {
++            const more = document.createElement("div");
++            more.className = "hint";
++            more.textContent = `${state.parcels.size - 300} more not listed (select them on the map).`;
++            list.appendChild(more);
++        }
++
++        updateButtons();
++    }
++
++    function refresh() {
++        drawMap();
++        renderList();
++        draw3d();
++    }
++
++    function selection() {
++        const all = [...state.parcels.values()];
++        const chosen = all.filter(p => p.selected);
++        return chosen.length ? chosen : all;
++    }
++
++    function updateButtons() {
++        const n = state.parcels.size;
++        const s = [...state.parcels.values()].filter(p => p.selected).length;
++        for (const id of ["parcels-geojson", "parcels-dxf", "parcels-csv", "parcels-clear", "parcels-select-all", "parcels-select-none"]) {
++            if (el(id)) el(id).disabled = !n || state.busy;
++        }
++        for (const id of ["parcels-tile", "parcels-view", "parcels-pick", "parcels-search-button"]) {
++            if (el(id)) el(id).disabled = state.busy;
++        }
++        if (el("parcels-tile") && !currentTile) el("parcels-tile").disabled = true;
++        const count = el("parcels-count");
++        if (count) count.textContent = n ? `${s ? `${s} selected of ` : ""}${n}` : "0";
++        const scope = el("parcels-export-scope");
++        if (scope) scope.textContent = n ? (s ? `Exports the ${s} selected parcel(s).` : `Nothing selected: exports all ${n} loaded parcels.`) : "";
++    }
++
++    /* ============================================================
++       EXPORT
++       ============================================================ */
++
++    const DISCLAIMER = "Not legally binding. Only an extract from the cantonal cadastral survey is.";
++
++    function download(name, text, type) {
++        const blob = new Blob([text], { type });
++        const a = document.createElement("a");
++        a.href = URL.createObjectURL(blob);
++        a.download = name;
++        document.body.appendChild(a);
++        a.click();
++        setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
++        window.usageCounter?.hit("downloads");
++    }
++
++    function baseName(parcels) {
++        if (parcels.length === 1 && parcels[0].number) {
++            return `parcel_${(parcels[0].egrid || parcels[0].number).replace(/[^\w-]+/g, "_")}`;
++        }
++        const tile = typeof swissKmTileId === "function" ? swissKmTileId(currentTile) : null;
++        return `parcels_${tile || new Date().toISOString().slice(0, 10)}`;
++    }
++
++    function exportGeoJson() {
++        const parcels = selection();
++        const round = v => Math.round(v * 1000) / 1000;
++        const ring = r => [...r, r[0]].map(([e, n]) => [round(e), round(n)]);
++
++        const collection = {
++            type: "FeatureCollection",
++            name: baseName(parcels),
++            crs: { type: "name", properties: { name: "urn:ogc:def:crs:EPSG::2056" } },
++            features: parcels.map(p => ({
++                type: "Feature",
++                properties: {
++                    kind: p.kind, number: p.number, egrid: p.egrid, nbident: p.nbident,
++                    area_m2: round(p.area), perimeter_m: round(p.perimeter),
++                    source: state.source,
++                    ...p.props
++                },
++                geometry: p.polygons.length === 1
++                    ? { type: "Polygon", coordinates: p.polygons[0].map(ring) }
++                    : { type: "MultiPolygon", coordinates: p.polygons.map(rs => rs.map(ring)) }
++            }))
++        };
++
++        download(`${baseName(parcels)}_LV95.geojson`, JSON.stringify(collection), "application/geo+json");
++    }
++
++    function exportCsv() {
++        const parcels = selection();
++        const f = v => v.toFixed(3);
++        const wkt = p => {
++            const ring = r => `(${[...r, r[0]].map(([e, n]) => `${f(e)} ${f(n)}`).join(", ")})`;
++            const poly = rs => `(${rs.map(ring).join(", ")})`;
++            return p.polygons.length === 1 ? `POLYGON ${poly(p.polygons[0])}` : `MULTIPOLYGON (${p.polygons.map(poly).join(", ")})`;
++        };
++        const quote = s => `"${String(s).replace(/"/g, '""')}"`;
++        const rows = ["kind;number;egrid;nbident;area_m2;perimeter_m;label_E;label_N;wkt_lv95"];
++        for (const p of parcels) {
++            rows.push([p.kind, p.number, p.egrid, p.nbident, p.area.toFixed(1), p.perimeter.toFixed(2),
++                p.label ? f(p.label[0]) : "", p.label ? f(p.label[1]) : "", quote(wkt(p))].join(";"));
++        }
++        download(`${baseName(parcels)}_LV95.csv`, "\ufeff" + rows.join("\r\n"), "text/csv");
++    }
++
++    /*
++     * DXF R12 (AC1009): opens in Rhino, AutoCAD, QGIS, Vectorworks, ArchiCAD.
++     * One closed POLYLINE per ring, layers per kind, parcel numbers as TEXT.
++     * opts.drape: 3D polylines on swissALTI3D; opts.origin: [E, N] subtracted.
++     */
++    function buildDxf(parcels, opts) {
++        const [oE, oN] = opts.origin || [0, 0];
++        const f = v => v.toFixed(3);
++        const out = [];
++        const g = (code, value) => out.push(String(code), String(value));
++
++        const used = [...new Set(parcels.map(p => p.kind))];
++
++        g(0, "SECTION"); g(2, "HEADER");
++        g(9, "$ACADVER"); g(1, "AC1009");
++        g(9, "$INSUNITS"); g(70, 6);
++        g(0, "ENDSEC");
++
++        g(0, "SECTION"); g(2, "TABLES");
++        g(0, "TABLE"); g(2, "LAYER"); g(70, used.length * 2);
++        for (const kind of used) {
++            for (const [name, aci] of [[KINDS[kind].dxf, KINDS[kind].aci], [`${KINDS[kind].dxf}_NR`, 7]]) {
++                g(0, "LAYER"); g(2, name); g(70, 0); g(62, aci); g(6, "CONTINUOUS");
++            }
++        }
++        g(0, "ENDTAB");
++        g(0, "ENDSEC");
++
++        g(0, "SECTION"); g(2, "ENTITIES");
++
++        for (const p of parcels) {
++            const layer = KINDS[p.kind].dxf;
++
++            for (const rings of p.polygons) {
++                for (const ring of rings) {
++                    let pts = ring.map(([e, n]) => [e, n, 0]);
++
++                    if (opts.drape) {
++                        pts = densify(ring, DRAPE_STEP).slice(0, -1).map(([e, n]) => [e, n, zAt(e, n)]);
++                        const valid = pts.filter(q => q[2] === q[2]);
++                        const mean = valid.length ? valid.reduce((s, q) => s + q[2], 0) / valid.length : 0;
++                        for (const q of pts) if (!(q[2] === q[2])) q[2] = mean;
++                    }
++
++                    g(0, "POLYLINE"); g(8, layer); g(66, 1);
++                    g(10, 0); g(20, 0); g(30, 0);
++                    g(70, opts.drape ? 9 : 1);                 // 1 closed, 8 3D polyline
++                    for (const [e, n, z] of pts) {
++                        g(0, "VERTEX"); g(8, layer);
++                        g(10, f(e - oE)); g(20, f(n - oN)); g(30, f(z));
++                        if (opts.drape) g(70, 32);
++                    }
++                    g(0, "SEQEND"); g(8, layer);
++                }
++            }
++
++            if (p.number && p.label) {
++                const z = opts.drape ? (zAt(p.label[0], p.label[1]) || 0) : 0;
++                const h = Math.max(0.8, Math.min(4, Math.sqrt(p.area) / 12));
++                g(0, "TEXT"); g(8, `${layer}_NR`);
++                g(10, f(p.label[0] - oE)); g(20, f(p.label[1] - oN)); g(30, f(z));
++                g(40, h.toFixed(2)); g(1, p.number);
++                g(72, 1); g(73, 2);                             // centred
++                g(11, f(p.label[0] - oE)); g(21, f(p.label[1] - oN)); g(31, f(z));
++            }
++        }
++
++        g(0, "ENDSEC");
++        g(0, "EOF");
++        return out.join("\r\n") + "\r\n";
++    }
++
++    async function exportDxf() {
++        const parcels = selection();
++        const drape = el("parcels-dxf-3d")?.checked;
++        const local = el("parcels-dxf-local")?.checked;
++
++        if (drape) {
++            if (!currentTile) { setInfo("Draped 3D export needs a selected tile (for swissALTI3D)."); return; }
++            setInfo("Loading swissALTI3D for draping…");
++            await swissEnsureAlti();
++        }
++
++        let origin = [0, 0];
++        if (local) {
++            let minE = Infinity, minN = Infinity;
++            for (const p of parcels) {
++                for (const [e, n] of p.polygons.flat(2)) { if (e < minE) minE = e; if (n < minN) minN = n; }
++            }
++            origin = [Math.floor(minE / 100) * 100, Math.floor(minN / 100) * 100];
++        }
++
++        const name = `${baseName(parcels)}_LV95${drape ? "_3D" : ""}${local ? `_origin_${origin[0]}_${origin[1]}` : ""}.dxf`;
++        download(name, buildDxf(parcels, { drape, origin }), "application/dxf");
++        setInfo(`${parcels.length} parcel(s) exported. ${DISCLAIMER}`);
++    }
++
++    function clearAll() {
++        state.parcels.clear();
++        state.layer?.clearLayers();
++        clear3d();
++        renderList();
++        if (el("parcels-results")) el("parcels-results").innerHTML = "";
++        setInfo("Parcels cleared.");
++    }
++
++    /* ============================================================
++       INIT
++       ============================================================ */
++
++    function init() {
++        el("parcels-search-button")?.addEventListener("click", search);
++        el("parcels-search")?.addEventListener("keydown", e => { if (e.key === "Enter") search(); });
++        el("parcels-pick")?.addEventListener("click", togglePick);
++        el("parcels-tile")?.addEventListener("click", () => loadArea("tile"));
++        el("parcels-view")?.addEventListener("click", () => loadArea("view"));
++        el("parcels-show-map")?.addEventListener("change", drawMap);
++        el("parcels-show-3d")?.addEventListener("change", draw3d);
++        el("parcels-select-all")?.addEventListener("click", () => { for (const p of state.parcels.values()) p.selected = true; refresh(); });
++        el("parcels-select-none")?.addEventListener("click", () => { for (const p of state.parcels.values()) p.selected = false; refresh(); });
++        el("parcels-clear")?.addEventListener("click", clearAll);
++        el("parcels-geojson")?.addEventListener("click", exportGeoJson);
++        el("parcels-csv")?.addEventListener("click", exportCsv);
++        el("parcels-dxf")?.addEventListener("click", () => exportDxf().catch(err => setInfo(`DXF export failed: ${err.message}`)));
++
++        // the "load for this tile" button depends on the selected tile
++        setInterval(updateButtons, 1500);
++        updateButtons();
++    }
++
++    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
++    else init();
++
++    // for the console and other modules
++    window.swissParcels = {
++        parcels: () => [...state.parcels.values()],
++        loadAtPoint, loadBox: box => loadBox(box).then(p => { refresh(); return p; }),
++        _test: { polygonsOf, polygonsArea, containsPoint, labelPoint, densify, buildDxf, makeParcel }
++    };
++})();
+diff --git a/print.js b/print.js
+index 2de3707..765170e 100644
+--- a/print.js
++++ b/print.js
+@@ -9,9 +9,23 @@
+  *   negative   casting mould: the inverted surface, mirrored, with a rim
+  *              around it - pour into it, turn the cast over: positive
+  *
+- * Everything is turned into a height raster (top view, highest surface per
+- * cell) first, so the result is always closed and has no overhangs (roof
+- * overhangs become vertical). Units: millimetres at the chosen scale.
++ * Terrain: a closed height-field solid from swissALTI3D at up to its native
++ * 0.5 m (the terrain data IS a height raster, so this is exact).
++ *
++ * Buildings: the ORIGINAL swissBUILDINGS3D triangles - the same faces as in
++ * the 3D view, not rasterised. Ground vertices are pushed into the terrain
++ * (no gaps on slopes), cuts at the area edge get flat caps.
++ *
++ *   positive   terrain and buildings joined by an exact boolean union into
++ *              one closed solid
++ *   negative   rim block minus the model turned upside down (exact boolean
++ *              subtraction), mirrored north-south as the cast comes out
++ *
++ * The booleans use manifold-3d (WebAssembly, loaded on demand). Buildings
++ * that are not closed solids in the source data, or a failed library load,
++ * fall back gracefully: separate shells (positive) or a 0.25 m raster (mould).
++ *
++ * Units: millimetres at the chosen scale.
+  */
+ 
+ (function () {
+@@ -28,49 +42,229 @@
+      * mm. Returns triangles (Float32Array, 9 numbers each), outward facing.
+      */
+     function solid(nx, ny, step, top) {
+-        const tris = [];
+-        const tri = (a, b, c) => tris.push(...a, ...b, ...c);
+-        const P = (i, j) => [i * step, j * step, top(i, j)];
+-        const B = (i, j) => [i * step, j * step, 0];
++        // heights once, triangles into one preallocated array (millions of
++        // triangles would not fit into a plain JS array)
++        const H = new Float32Array(nx * ny);
++        for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) H[j * nx + i] = top(i, j);
++
++        const count = 2 * (nx - 1) * (ny - 1) + 4 * (nx - 1) + 4 * (ny - 1) + 2 * (nx - 1) + 2 * (ny - 1);
++        const tris = new Float32Array(count * 9);
++        let o = 0;
++        const v = (x, y, z) => { tris[o++] = x; tris[o++] = y; tris[o++] = z; };
++        const P = (i, j) => v(i * step, j * step, H[j * nx + i]);
++        const B = (i, j) => v(i * step, j * step, 0);
+ 
+         // top: counter-clockwise from above (normal up)
+         for (let j = 0; j < ny - 1; j++) {
+             for (let i = 0; i < nx - 1; i++) {
+-                tri(P(i, j), P(i + 1, j), P(i + 1, j + 1));
+-                tri(P(i, j), P(i + 1, j + 1), P(i, j + 1));
++                P(i, j); P(i + 1, j); P(i + 1, j + 1);
++                P(i, j); P(i + 1, j + 1); P(i, j + 1);
+             }
+         }
+ 
+         // walls: along the boundary, normal outward
+         for (let i = 0; i < nx - 1; i++) {                 // south (j = 0), normal -y
+-            tri(B(i, 0), B(i + 1, 0), P(i + 1, 0));
+-            tri(B(i, 0), P(i + 1, 0), P(i, 0));
++            B(i, 0); B(i + 1, 0); P(i + 1, 0);
++            B(i, 0); P(i + 1, 0); P(i, 0);
+         }
+-        for (let i = 0; i < nx - 1; i++) {                 // north (j = ny-1), normal +y
+-            const j = ny - 1;
+-            tri(B(i + 1, j), B(i, j), P(i, j));
+-            tri(B(i + 1, j), P(i, j), P(i + 1, j));
++        for (let i = 0, j = ny - 1; i < nx - 1; i++) {     // north (j = ny-1), normal +y
++            B(i + 1, j); B(i, j); P(i, j);
++            B(i + 1, j); P(i, j); P(i + 1, j);
+         }
+         for (let j = 0; j < ny - 1; j++) {                 // west (i = 0), normal -x
+-            tri(B(0, j + 1), B(0, j), P(0, j));
+-            tri(B(0, j + 1), P(0, j), P(0, j + 1));
++            B(0, j + 1); B(0, j); P(0, j);
++            B(0, j + 1); P(0, j); P(0, j + 1);
+         }
+-        for (let j = 0; j < ny - 1; j++) {                 // east (i = nx-1), normal +x
+-            const i = nx - 1;
+-            tri(B(i, j), B(i, j + 1), P(i, j + 1));
+-            tri(B(i, j), P(i, j + 1), P(i, j));
++        for (let j = 0, i = nx - 1; j < ny - 1; j++) {     // east (i = nx-1), normal +x
++            B(i, j); B(i, j + 1); P(i, j + 1);
++            B(i, j); P(i, j + 1); P(i, j);
+         }
+ 
+         // base: fan from its centre to every boundary vertex (normal down)
+-        const centre = [(nx - 1) * step / 2, (ny - 1) * step / 2, 0];
++        const cx = (nx - 1) * step / 2, cy = (ny - 1) * step / 2;
+         const ring = [];
+-        for (let i = 0; i < nx - 1; i++) ring.push(B(i, 0));
+-        for (let j = 0; j < ny - 1; j++) ring.push(B(nx - 1, j));
+-        for (let i = nx - 1; i > 0; i--) ring.push(B(i, ny - 1));
+-        for (let j = ny - 1; j > 0; j--) ring.push(B(0, j));
+-        for (let r = 0; r < ring.length; r++) tri(centre, ring[(r + 1) % ring.length], ring[r]);
++        for (let i = 0; i < nx - 1; i++) ring.push([i, 0]);
++        for (let j = 0; j < ny - 1; j++) ring.push([nx - 1, j]);
++        for (let i = nx - 1; i > 0; i--) ring.push([i, ny - 1]);
++        for (let j = ny - 1; j > 0; j--) ring.push([0, j]);
++        for (let r = 0; r < ring.length; r++) {
++            const a = ring[(r + 1) % ring.length], b = ring[r];
++            v(cx, cy, 0); B(a[0], a[1]); B(b[0], b[1]);
++        }
++
++        return tris;
++    }
++
++    /*
++     * swissBUILDINGS3D triangles (LV95, metres) -> print triangles (mm), as
++     * they are: clipped to the print area, ground vertices sunk into the
++     * terrain so no gap opens on slopes, cuts at the area edge capped.
++     * g: E0, N0, E1, N1 (extent of the terrain solid), lo (height at the
++     * top of the base), base, mm, exaggeration, groundAt(e, n).
++     */
++    const GROUND_TOL = 0.75;   // m: vertices this close to the terrain are footings
++    const SINK = 1.5;          // m: how deep footings go into the terrain
++
++    function buildingTriangles(T, shift, g) {
++        const out = [];
++        const zmin = g.base * 0.5;
++
++        const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
++        const planes = [
++            [p => p[0] >= g.E0, (a, b) => lerp(a, b, (g.E0 - a[0]) / (b[0] - a[0]))],
++            [p => p[0] <= g.E1, (a, b) => lerp(a, b, (g.E1 - a[0]) / (b[0] - a[0]))],
++            [p => p[1] >= g.N0, (a, b) => lerp(a, b, (g.N0 - a[1]) / (b[1] - a[1]))],
++            [p => p[1] <= g.N1, (a, b) => lerp(a, b, (g.N1 - a[1]) / (b[1] - a[1]))]
++        ];
++        const clip = (poly, keep, cut) => {
++            const res = [];
++            for (let k = 0; k < poly.length; k++) {
++                const a = poly[k], b = poly[(k + 1) % poly.length];
++                const ina = keep(a), inb = keep(b);
++                if (ina) res.push(a);
++                if (ina !== inb) res.push(cut(a, b));
++            }
++            return res;
++        };
++
++        const toPrint = ([e, n, z]) => {
++            let h = z + shift;
++            const ground = g.groundAt(e, n);
++            if (ground === ground && h <= ground + GROUND_TOL) h = ground - SINK;
++            return [(e - g.E0) * g.mm, (n - g.N0) * g.mm, Math.max(zmin, g.base + (h - g.lo) * g.exaggeration * g.mm)];
++        };
++
++        let top = 0;
++        for (let t = 0; t + 8 < T.length; t += 9) {
++            let poly = [[T[t], T[t + 1], T[t + 2]], [T[t + 3], T[t + 4], T[t + 5]], [T[t + 6], T[t + 7], T[t + 8]]];
++
++            if (!poly.every(p => p[0] >= g.E0 && p[0] <= g.E1 && p[1] >= g.N0 && p[1] <= g.N1)) {
++                for (const [keep, cut] of planes) { poly = clip(poly, keep, cut); if (poly.length < 3) break; }
++                if (poly.length < 3) continue;
++            }
++
++            const P = poly.map(toPrint);
++            for (let k = 1; k + 1 < P.length; k++) {
++                out.push(...P[0], ...P[k], ...P[k + 1]);
++                top = Math.max(top, P[0][2], P[k][2], P[k + 1][2]);
++            }
++        }
++
++        capCuts(out, [(g.E1 - g.E0) * g.mm, (g.N1 - g.N0) * g.mm]);
++        return { triangles: new Float32Array(out), top };
++    }
++
++    /*
++     * Buildings cut by the print-area edge are open there. Find the open
++     * edges lying in one of the four edge planes, chain them into loops and
++     * close each loop with a flat cap (ear clipping), facing outward.
++     */
++    function capCuts(out, [X, Y]) {
++        const eps = 1e-4, q = v => Math.round(v * 1e4);
++        const pts = new Map(), edges = new Map();
++
++        const vid = (x, y, z) => { const k = `${q(x)},${q(y)},${q(z)}`; if (!pts.has(k)) pts.set(k, [x, y, z]); return k; };
++        for (let t = 0; t < out.length; t += 9) {
++            const ids = [vid(out[t], out[t + 1], out[t + 2]), vid(out[t + 3], out[t + 4], out[t + 5]), vid(out[t + 6], out[t + 7], out[t + 8])];
++            for (let k = 0; k < 3; k++) {
++                const a = ids[k], b = ids[(k + 1) % 3], rev = `${b}|${a}`;
++                if (edges.has(rev)) edges.delete(rev); else edges.set(`${a}|${b}`, [a, b]);
++            }
++        }
++
++        const planes = [
++            { on: p => Math.abs(p[0]) < eps, uv: p => [p[1], p[2]], n: [-1, 0, 0] },
++            { on: p => Math.abs(p[0] - X) < eps, uv: p => [p[1], p[2]], n: [1, 0, 0] },
++            { on: p => Math.abs(p[1]) < eps, uv: p => [p[0], p[2]], n: [0, -1, 0] },
++            { on: p => Math.abs(p[1] - Y) < eps, uv: p => [p[0], p[2]], n: [0, 1, 0] }
++        ];
++
++        for (const plane of planes) {
++            // open edges in this plane; the cap runs along them in reverse
++            const next = new Map();
++            for (const [a, b] of edges.values()) {
++                if (plane.on(pts.get(a)) && plane.on(pts.get(b))) next.set(b, a);
++            }
++
++            while (next.size) {
++                const start = next.keys().next().value;
++                const loop = [];
++                let cur = start;
++                while (next.has(cur) && loop.length < 100000) {
++                    loop.push(cur);
++                    const nxt = next.get(cur);
++                    next.delete(cur);
++                    cur = nxt;
++                }
++                if (cur !== start || loop.length < 3) continue;     // not a closed loop: leave it
++
++                const P3 = loop.map(k => pts.get(k));
++                for (const [a, b, c] of earClip(P3.map(plane.uv))) {
++                    const A = P3[a];
++                    let B = P3[b], C = P3[c];
++                    const ux = B[0] - A[0], uy = B[1] - A[1], uz = B[2] - A[2];
++                    const vx = C[0] - A[0], vy = C[1] - A[1], vz = C[2] - A[2];
++                    const dot = (uy * vz - uz * vy) * plane.n[0] + (uz * vx - ux * vz) * plane.n[1] + (ux * vy - uy * vx) * plane.n[2];
++                    if (dot < 0) [B, C] = [C, B];
++                    out.push(...A, ...B, ...C);
++                }
++            }
++        }
++    }
++
++    /* Ear clipping of a simple polygon (2D); returns index triples. */
++    function earClip(poly) {
++        const n = poly.length;
++        let area = 0;
++        for (let i = 0, j = n - 1; i < n; j = i++) area += (poly[j][0] - poly[i][0]) * (poly[j][1] + poly[i][1]);
++        const idx = [...Array(n).keys()];
++        if (area < 0) idx.reverse();                              // make it counter-clockwise
++
++        const EPS = 1e-9;
++        const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
++        // strictly inside: points on an edge (straight runs of the outline) do not block an ear
++        const inTri = (p, a, b, c) => cross(a, b, p) > EPS && cross(b, c, p) > EPS && cross(c, a, p) > EPS;
++        const tris = [];
+ 
+-        return new Float32Array(tris);
++        for (let guard = 0; idx.length > 3 && guard < n * n; guard++) {
++            let clipped = false;
++            for (let k = 0; k < idx.length; k++) {
++                const ia = idx[(k + idx.length - 1) % idx.length], ib = idx[k], ic = idx[(k + 1) % idx.length];
++                const a = poly[ia], b = poly[ib], c = poly[ic];
++                if (cross(a, b, c) <= EPS) continue;              // reflex or straight: not an ear tip
++                if (idx.some(i => i !== ia && i !== ib && i !== ic && inTri(poly[i], a, b, c))) continue;
++                tris.push([ia, ib, ic]);
++                idx.splice(k, 1);
++                clipped = true;
++                break;
++            }
++            if (!clipped) break;
++        }
++        if (idx.length === 3 && Math.abs(cross(poly[idx[0]], poly[idx[1]], poly[idx[2]])) > EPS) tris.push(idx);
++
++        // vertices on straight runs end up on a triangle edge instead of a
++        // corner: split that triangle so the cap meets the walls edge to edge
++        const used = new Set(tris.flat());
++        for (let v = 0; v < n; v++) {
++            if (used.has(v)) continue;
++            const p = poly[v];
++            for (let t = 0; t < tris.length; t++) {
++                const T = tris[t];
++                let done = false;
++                for (let k = 0; k < 3; k++) {
++                    const a = poly[T[k]], b = poly[T[(k + 1) % 3]];
++                    const len2 = (b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2;
++                    const along = ((p[0] - a[0]) * (b[0] - a[0]) + (p[1] - a[1]) * (b[1] - a[1])) / len2;
++                    if (along <= 0 || along >= 1 || Math.abs(cross(a, b, p)) > 1e-6 * Math.sqrt(len2)) continue;
++                    const r = T[(k + 2) % 3];
++                    tris.splice(t, 1, [T[k], v, r], [v, T[(k + 1) % 3], r]);
++                    done = true;
++                    break;
++                }
++                if (done) break;
++            }
++        }
++        return tris;
+     }
+ 
+     /*
+@@ -89,7 +283,8 @@
+         if (!negative) {
+             return {
+                 triangles: solid(nx, ny, step, (i, j) => base + (z[j * nx + i] - lo) * exaggeration * mm),
+-                size: [(nx - 1) * step, (ny - 1) * step, base + relief]
++                size: [(nx - 1) * step, (ny - 1) * step, base + relief],
++                lo, mm
+             };
+         }
+ 
+@@ -108,6 +303,237 @@
+         return { triangles: solid(NX, NY, step, top), size: [(NX - 1) * step, (NY - 1) * step, rimTop] };
+     }
+ 
++
++    /* ============================================================
++       Exact booleans (manifold-3d, WebAssembly, loaded on demand)
++       ============================================================ */
++
++    // pinned; ES module that fetches manifold.wasm from the same folder
++    const MANIFOLD_URL = "https://cdn.jsdelivr.net/npm/manifold-3d@3.5.4/manifold.js";
++    let manifoldPromise = null;
++
++    function loadManifold() {
++        if (!manifoldPromise) {
++            manifoldPromise = (async () => {
++                const module = await import(window.SWISS_MANIFOLD_URL || MANIFOLD_URL);
++                const wasm = await module.default();
++                wasm.setup();
++                return wasm;
++            })().catch(error => { manifoldPromise = null; throw error; });
++        }
++        return manifoldPromise;
++    }
++
++    /* Height-field solid as an indexed mesh (shared vertices) for manifold. */
++    function solidIndexed(nx, ny, step, H) {
++        const n = nx * ny;
++        const vert = new Float32Array((2 * n + 1) * 3);
++        for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
++            const k = j * nx + i;
++            vert.set([i * step, j * step, H[k]], k * 3);              // top
++            vert.set([i * step, j * step, 0], (n + k) * 3);           // bottom
++        }
++        const C = 2 * n;
++        vert.set([(nx - 1) * step / 2, (ny - 1) * step / 2, 0], C * 3);
++
++        const tri = [];
++        const P = (i, j) => j * nx + i, Bt = (i, j) => n + j * nx + i;
++        for (let j = 0; j < ny - 1; j++) for (let i = 0; i < nx - 1; i++) {
++            tri.push(P(i, j), P(i + 1, j), P(i + 1, j + 1), P(i, j), P(i + 1, j + 1), P(i, j + 1));
++        }
++        for (let i = 0; i < nx - 1; i++) tri.push(Bt(i, 0), Bt(i + 1, 0), P(i + 1, 0), Bt(i, 0), P(i + 1, 0), P(i, 0));
++        for (let i = 0, j = ny - 1; i < nx - 1; i++) tri.push(Bt(i + 1, j), Bt(i, j), P(i, j), Bt(i + 1, j), P(i, j), P(i + 1, j));
++        for (let j = 0; j < ny - 1; j++) tri.push(Bt(0, j + 1), Bt(0, j), P(0, j), Bt(0, j + 1), P(0, j), P(0, j + 1));
++        for (let j = 0, i = nx - 1; j < ny - 1; j++) tri.push(Bt(i, j), Bt(i, j + 1), P(i, j + 1), Bt(i, j), P(i, j + 1), P(i, j));
++
++        const ring = [];
++        for (let i = 0; i < nx - 1; i++) ring.push(Bt(i, 0));
++        for (let j = 0; j < ny - 1; j++) ring.push(Bt(nx - 1, j));
++        for (let i = nx - 1; i > 0; i--) ring.push(Bt(i, ny - 1));
++        for (let j = ny - 1; j > 0; j--) ring.push(Bt(0, j));
++        for (let r = 0; r < ring.length; r++) tri.push(C, ring[(r + 1) % ring.length], ring[r]);
++
++        return { vert, tri: Uint32Array.from(tri) };
++    }
++
++    /*
++     * Triangle soup -> one indexed mesh per building. Vertices are welded by
++     * position; faces are grouped across edges that join exactly two faces,
++     * so row houses sharing a wall stay separate solids.
++     */
++    function splitShells(T) {
++        const q = v => Math.round(v * 1e4);
++        const ids = new Map(), verts = [];
++        const vid = (x, y, z) => {
++            const k = `${q(x)},${q(y)},${q(z)}`;
++            let id = ids.get(k);
++            if (id === undefined) { id = verts.length / 3; ids.set(k, id); verts.push(x, y, z); }
++            return id;
++        };
++
++        const faces = [];
++        for (let t = 0; t + 8 < T.length; t += 9) {
++            const f = [vid(T[t], T[t + 1], T[t + 2]), vid(T[t + 3], T[t + 4], T[t + 5]), vid(T[t + 6], T[t + 7], T[t + 8])];
++            if (f[0] !== f[1] && f[1] !== f[2] && f[0] !== f[2]) faces.push(f);
++        }
++
++        const edgeFaces = new Map();
++        faces.forEach((f, fi) => {
++            for (let k = 0; k < 3; k++) {
++                const a = f[k], b = f[(k + 1) % 3], key = a < b ? `${a}|${b}` : `${b}|${a}`;
++                (edgeFaces.get(key) || edgeFaces.set(key, []).get(key)).push(fi);
++            }
++        });
++
++        const parent = faces.map((_, i) => i);
++        const find = i => { while (parent[i] !== i) i = parent[i] = parent[parent[i]]; return i; };
++        for (const list of edgeFaces.values()) {
++            if (list.length === 2) parent[find(list[0])] = find(list[1]);
++        }
++
++        const groups = new Map();
++        faces.forEach((f, fi) => { const r = find(fi); (groups.get(r) || groups.set(r, []).get(r)).push(f); });
++
++        return [...groups.values()].map(group => {
++            const local = new Map(), vert = [], tri = [];
++            for (const f of group) for (const v of f) {
++                let id = local.get(v);
++                if (id === undefined) { id = vert.length / 3; local.set(v, id); vert.push(verts[v * 3], verts[v * 3 + 1], verts[v * 3 + 2]); }
++                tri.push(id);
++            }
++            return { vert: Float32Array.from(vert), tri: Uint32Array.from(tri) };
++        });
++    }
++
++    /* Indexed mesh -> Manifold, or null if it is not a closed solid. */
++    function toManifold(wasm, { vert, tri }) {
++        try {
++            const mesh = new wasm.Mesh({ numProp: 3, vertProperties: vert, triVerts: tri });
++            mesh.merge();
++            const m = new wasm.Manifold(mesh);
++            if (m.status && m.status() !== "NoError" && m.status() !== 0) { m.delete?.(); return null; }
++            if (m.isEmpty()) { m.delete?.(); return null; }
++            return m;
++        } catch (error) {
++            return null;
++        }
++    }
++
++    function soupOf({ vert, tri }) {
++        const out = new Float32Array(tri.length * 3);
++        for (let i = 0; i < tri.length; i++) out.set(vert.subarray(tri[i] * 3, tri[i] * 3 + 3), i * 3);
++        return out;
++    }
++
++    function manifoldTriangles(m) {
++        const mesh = m.getMesh();
++        const P = mesh.vertProperties, np = mesh.numProp, V = mesh.triVerts;
++        const out = new Float32Array(V.length * 3);
++        for (let i = 0; i < V.length; i++) {
++            out[i * 3] = P[V[i] * np]; out[i * 3 + 1] = P[V[i] * np + 1]; out[i * 3 + 2] = P[V[i] * np + 2];
++        }
++        return out;
++    }
++
++    function concat(arrays) {
++        const out = new Float32Array(arrays.reduce((s, a) => s + a.length, 0));
++        let o = 0;
++        for (const a of arrays) { out.set(a, o); o += a.length; }
++        return out;
++    }
++
++    /*
++     * The print model as manifolds: terrain solid (heights H, base lowered by
++     * `extra` mm below 0) and each building that is a closed solid. Buildings
++     * that are not are returned as `open` (triangle soups).
++     */
++    function modelManifolds(wasm, nx, ny, step, H, buildingTris, extra = 0) {
++        const lifted = extra ? H.map(h => h + extra) : H;
++        let terrain = toManifold(wasm, solidIndexed(nx, ny, step, lifted));
++        if (!terrain) throw new Error("terrain solid is not closed");
++        if (extra) { const t = terrain.translate([0, 0, -extra]); terrain.delete?.(); terrain = t; }
++
++        const solids = [], open = [];
++        for (const shell of buildingTris ? splitShells(buildingTris) : []) {
++            const m = toManifold(wasm, shell);
++            if (m) solids.push(m); else open.push(soupOf(shell));
++        }
++        return { terrain, solids, open };
++    }
++
++    /*
++     * The exact print model: positive = terrain ∪ buildings as one solid;
++     * negative = rim block minus the model turned upside down (mirrored
++     * north-south, as the cast comes out of the mould).
++     * z: terrain heights (LV95 m) at nodes E0 + i*cell, N0 + j*cell.
++     */
++    function exactModel(wasm, { nx, ny, cell, z, E0, N0, buildings, shift = 0, groundAt, scale, exaggeration = 1, base = 5, negative = false, rim = 4 }) {
++        const mm = 1000 / scale, step = cell * mm;
++        const X = (nx - 1) * step, Y = (ny - 1) * step;
++        let lo = Infinity;
++        for (const v of z) if (v < lo) lo = v;
++
++        const g = { E0, N0, E1: E0 + (nx - 1) * cell, N1: N0 + (ny - 1) * cell, lo, mm, base, exaggeration, groundAt };
++        const bt = buildingTriangles(buildings, shift, g);
++        const heights = zz => Float32Array.from(zz, v => base + (v - lo) * exaggeration * mm);
++        const maxOf = H => H.reduce((m, v) => (v > m ? v : m), -Infinity);
++        const free = list => list.forEach(m => m?.delete?.());
++
++        if (!negative) {
++            const H = heights(z);
++            const { terrain, solids, open } = modelManifolds(wasm, nx, ny, step, H, bt.triangles);
++            const all = wasm.Manifold.union([terrain, ...solids]);
++            const triangles = concat([manifoldTriangles(all), ...open]);
++            free([terrain, ...solids, all]);
++            return { triangles, size: [X, Y, Math.max(maxOf(H), bt.top)], solids: solids.length, open: open.length };
++        }
++
++        // buildings that are not closed solids cannot be subtracted:
++        // rasterise those finely into the terrain heights instead
++        const shells = splitShells(bt.triangles);
++        const closed = [], open = [];
++        for (const shell of shells) {
++            const m = toManifold(wasm, shell);
++            if (m) { closed.push(soupOf(shell)); m.delete?.(); } else open.push(soupOf(shell));
++        }
++        const zz = Float32Array.from(z);
++        if (open.length && window.swissSurfaces?.rasteriseTriangles) {
++            const back = new Float64Array(open.reduce((s, a) => s + a.length, 0));
++            let o = 0;
++            for (const a of open) for (let i = 0; i < a.length; i += 3) {
++                back[o++] = a[i] / mm + E0; back[o++] = a[i + 1] / mm + N0;
++                back[o++] = lo + (a[i + 2] - base) / (exaggeration * mm);
++            }
++            const fine = Math.min(0.25, cell);
++            const grid = { minE: E0 - cell / 2, minN: N0 - cell / 2, cell: fine, nx: Math.ceil(nx * cell / fine), ny: Math.ceil(ny * cell / fine) };
++            window.swissSurfaces.rasteriseTriangles(back, grid);
++            for (let gj = 0; gj < grid.ny; gj++) for (let gi = 0; gi < grid.nx; gi++) {
++                const h = grid.z[gj * grid.nx + gi];
++                if (!(h === h)) continue;
++                const i = Math.min(nx - 1, Math.floor(gi * fine / cell)), j = Math.min(ny - 1, Math.floor(gj * fine / cell));
++                if (h > zz[j * nx + i]) zz[j * nx + i] = h;
++            }
++        }
++
++        const H = heights(zz);
++        const EXTRA = 10;                                       // mm: the model sticks out of the block
++        const { terrain, solids } = modelManifolds(wasm, nx, ny, step, H, closed.length ? concat(closed) : null, EXTRA);
++        const model = wasm.Manifold.union([terrain, ...solids]);
++
++        const topMax = Math.max(maxOf(H), bt.top);
++        const K = base + topMax;                                // highest point -> floor of `base` mm
++        const rimTop = topMax + 3;
++        const block = wasm.Manifold.cube([X + 2 * rim, Y + 2 * rim, rimTop]);
++        // (x, y, z) -> (x + rim, Y - y + rim, K - z): upside down and mirrored north-south
++        const turned = model.rotate([180, 0, 0]);
++        const placed = turned.translate([rim, Y + rim, K]);
++        const mould = block.subtract(placed);
++        const triangles = manifoldTriangles(mould);
++        free([terrain, ...solids, model, block, turned, placed, mould]);
++
++        return { triangles, size: [X + 2 * rim, Y + 2 * rim, rimTop], solids: solids.length, open: open.length };
++    }
++
+     /* ============================================================
+        Binary STL
+        ============================================================ */
+@@ -258,7 +684,8 @@
+         const b = bounds();
+         const tiles = (Math.floor((b.maxE - 1e-6) / 1000) - Math.floor(b.minE / 1000) + 1) * (Math.floor((b.maxN - 1e-6) / 1000) - Math.floor(b.minN / 1000) + 1);
+         box.textContent = `Print size: ${Math.round(area.w * 1000 / scale)} × ${Math.round(area.h * 1000 / scale)} mm ` +
+-            `(${Math.round(area.w)} × ${Math.round(area.h)} m at 1:${scale.toLocaleString()}), covers ${tiles} km tile${tiles > 1 ? "s" : ""}.`;
++            `(${Math.round(area.w)} × ${Math.round(area.h)} m at 1:${scale.toLocaleString()}), covers ${tiles} km tile${tiles > 1 ? "s" : ""}. ` +
++            (() => { try { return `Terrain ${terrainCell(settings(), area.w, area.h)} m.`; } catch (error) { return `${error.message}.`; } })();
+     }
+ 
+     function update() {
+@@ -276,10 +703,34 @@
+             scale: Number(el("print-scale")?.value || 2000),
+             exaggeration: Number(el("print-exag")?.value || 1),
+             base: Number(el("print-base")?.value || 5),
+-            maxCells: Number(el("print-detail")?.value || 500)
++            detail: el("print-detail")?.value || "auto"
+         };
+     }
+ 
++    const AUTO_MAX_TRIS = 6e6;     // ~300 MB STL
++    const FULL_MAX_TRIS = 16e6;    // ~800 MB STL: beyond that browsers give up
++
++    /*
++     * Terrain grid spacing in metres. auto: about 0.2 mm on the print (one
++     * nozzle line), never finer than swissALTI3D's 0.5 m; full: 0.5 m.
++     */
++    function terrainCell(o, w, h) {
++        const tris = cell => 2 * (w / cell) * (h / cell);
++        if (o.detail === "full") {
++            if (tris(0.5) > FULL_MAX_TRIS) {
++                throw new Error(`full resolution would need ${(tris(0.5) / 1e6).toFixed(0)} M triangles – make the area smaller (max. about ${Math.floor(Math.sqrt(FULL_MAX_TRIS / 2) * 0.5)} m square) or use Auto`);
++            }
++            return 0.5;
++        }
++        if (o.detail === "auto") {
++            let cell = Math.max(0.5, o.scale * 0.0002);
++            cell = Math.max(cell, Math.sqrt(2 * w * h / AUTO_MAX_TRIS));
++            return cell <= 0.5 ? 0.5 : Math.ceil(cell * 4) / 4;
++        }
++        return Math.max(0.5, Math.max(w, h) / Number(o.detail || 500));
++    }
++
++
+     let busy = false;
+ 
+     async function exportPrint(withBuildings, negative) {
+@@ -292,43 +743,90 @@
+         const b = bounds();
+ 
+         try {
+-            const cell = Math.max(0.5, Math.max(area.w, area.h) / o.maxCells);
++            const cell = terrainCell(o, area.w, area.h);
+             const gsd = cell < 1.5 ? 0.5 : 2;
+ 
+             const terrain = await swissLoadAltiArea(b, gsd, text => setStatus(text));
+             if (terrain.missing === terrain.tiles) throw new Error("no swissALTI3D terrain for this area");
+ 
++            // grid nodes at cell centres (at 0.5 m: exactly the swissALTI3D pixels)
++            const E0 = b.minE + cell / 2, N0 = b.minN + cell / 2;
+             const nx = Math.max(2, Math.floor(area.w / cell)), ny = Math.max(2, Math.floor(area.h / cell));
++            setStatus(`Building terrain (${nx} × ${ny} at ${cell} m)…`);
++            await new Promise(r => setTimeout(r, 0));
++
+             const z = new Float32Array(nx * ny);
+             for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+-                z[j * nx + i] = terrain.at(b.minE + (i + 0.5) * cell, b.minN + (j + 0.5) * cell);
++                z[j * nx + i] = terrain.at(E0 + i * cell, N0 + j * cell);
+             }
+             window.swissSurfaces.fillGaps(z, nx, ny);
+ 
+-            let buildingNote = "";
++            let B = null, shift = 0, buildingNote = "", wasm = null;
+             if (withBuildings) {
+-                const B = await window.swissBuildings3D.loadBuildings({
++                B = await window.swissBuildings3D.loadBuildings({
+                     area: b, terrainAt: (e, n) => terrain.at(e, n), onProgress: text => setStatus(text)
+                 });
+-
+                 // LiDAR-checked offset from the surfaces, if available
+-                const shift = window.swissSurfaces?.current()?.check?.shift || 0;
+-
+-                // rasterise finely (max 1 m), then the highest value per print cell
+-                const fine = Math.min(1, cell);
+-                const grid = { minE: b.minE, minN: b.minN, cell: fine, nx: Math.ceil(area.w / fine), ny: Math.ceil(area.h / fine) };
+-                window.swissSurfaces.rasteriseTriangles(B.triangles, grid);
+-
+-                for (let gj = 0; gj < grid.ny; gj++) for (let gi = 0; gi < grid.nx; gi++) {
+-                    const h = grid.z[gj * grid.nx + gi];
+-                    if (!(h === h)) continue;
+-                    const i = Math.min(nx - 1, Math.floor(gi * fine / cell)), j = Math.min(ny - 1, Math.floor(gj * fine / cell));
+-                    if (h + shift > z[j * nx + i]) z[j * nx + i] = h + shift;
++                shift = window.swissSurfaces?.current()?.check?.shift || 0;
++
++                setStatus("Loading the geometry library…");
++                try { wasm = await loadManifold(); } catch (error) { console.warn("[print] manifold-3d not available:", error); }
++            }
++
++            setStatus("Building the model…");
++            await new Promise(r => setTimeout(r, 0));
++
++            let result = null;
++            const groundAt = (e, n) => terrain.at(e, n);
++
++            if (withBuildings && wasm) {
++                // exact: original building faces, joined with the terrain by a boolean union / subtraction
++                try {
++                    const r = exactModel(wasm, {
++                        nx, ny, cell, z, E0, N0, buildings: B.triangles, shift, groundAt,
++                        scale: o.scale, exaggeration: o.exaggeration, base: o.base, negative
++                    });
++                    result = r;
++                    buildingNote = `, ${r.solids.toLocaleString()} buildings with their original faces` +
++                        (r.open ? `, ${r.open} not closed in the source (${negative ? "rasterised at 0.25 m" : "added as separate shells"})` : "");
++                } catch (error) {
++                    console.warn("[print] exact model failed, falling back:", error);
++                    buildingNote = ` (exact geometry failed: ${error.message})`;
+                 }
+-                buildingNote = `, ${(B.triangles.length / 9).toLocaleString()} building faces`;
+             }
+ 
+-            const result = printSolid({ nx, ny, cell, z }, { ...o, negative });
++            if (!result) {
++                if (withBuildings && negative) {
++                    // fallback: a mould from one height raster, buildings at 0.25 m
++                    const fine = Math.min(0.25, cell);
++                    const grid = { minE: b.minE, minN: b.minN, cell: fine, nx: Math.ceil(area.w / fine), ny: Math.ceil(area.h / fine) };
++                    window.swissSurfaces.rasteriseTriangles(B.triangles, grid);
++                    for (let gj = 0; gj < grid.ny; gj++) for (let gi = 0; gi < grid.nx; gi++) {
++                        const h = grid.z[gj * grid.nx + gi];
++                        if (!(h === h)) continue;
++                        const i = Math.min(nx - 1, Math.floor(gi * fine / cell)), j = Math.min(ny - 1, Math.floor(gj * fine / cell));
++                        if (h + shift > z[j * nx + i]) z[j * nx + i] = h + shift;
++                    }
++                    buildingNote += wasm ? "" : " (geometry library not available: mould with buildings rasterised at 0.25 m)";
++                }
++
++                // terrain only: the height field IS the exact swissALTI3D surface
++                result = printSolid({ nx, ny, cell, z }, { ...o, negative });
++
++                if (withBuildings && !negative) {
++                    const bt = buildingTriangles(B.triangles, shift, {
++                        E0, N0, E1: E0 + (nx - 1) * cell, N1: N0 + (ny - 1) * cell,
++                        lo: result.lo, mm: result.mm, base: o.base, exaggeration: o.exaggeration, groundAt
++                    });
++                    result.triangles = concat([result.triangles, bt.triangles]);
++                    result.size[2] = Math.max(result.size[2], bt.top);
++                    buildingNote += `, ${(bt.triangles.length / 9).toLocaleString()} original building faces as separate shells`;
++                }
++            }
++
++            setStatus("Writing STL…");
++            await new Promise(r => setTimeout(r, 0));
++
+             const label = `${withBuildings ? "terrain+buildings" : "terrain"}_${negative ? "negative-mould" : "positive"}_1-${o.scale}` +
+                 (o.exaggeration !== 1 ? `_x${o.exaggeration}` : "");
+ 
+@@ -343,7 +841,7 @@
+             window.usageCounter?.hit("downloads");
+             setStatus(
+                 `STL saved: ${result.size.map(v => Math.round(v)).join(" × ")} mm, ` +
+-                `${(result.triangles.length / 9).toLocaleString()} triangles, ${terrain.tiles} terrain tile(s)${buildingNote}` +
++                `${(result.triangles.length / 9).toLocaleString()} triangles, terrain ${cell} m from ${terrain.tiles} tile(s)${buildingNote}` +
+                 (terrain.missing ? ` – ${terrain.missing} tile(s) without terrain` : "") +
+                 (negative ? " (mould: mirrored, pour and turn over)." : ".")
+             );
+@@ -390,5 +888,5 @@
+         el("surf-build")?.addEventListener("click", () => setTimeout(() => { if (!Number.isFinite(area.cE)) defaultArea(); syncInputs(); update(); }, 1500));
+     });
+ 
+-    window.swissPrint = { printSolid, solid, stl, area };
++    window.swissPrint = { printSolid, solid, stl, area, buildingTriangles, terrainCell, earClip, loadManifold, exactModel, splitShells, solidIndexed, manifoldTriangles };
+ })();
+diff --git a/style.css b/style.css
+index 31befe6..4c66ed2 100644
+--- a/style.css
++++ b/style.css
+@@ -498,3 +498,12 @@ output { float: right; color: #c4c4c4; font-variant-numeric: tabular-nums; }
+ @media (prefers-reduced-motion: reduce) {
+     * { transition: none !important; }
+ }
++
++/* Parcels */
++#parcels-results { margin: 6px 0 8px; max-height: 160px; overflow-y: auto; }
++#parcels-results:empty { display: none; }
++#parcels-list { max-height: 200px; overflow-y: auto; margin-bottom: 10px; border-top: 1px solid var(--line); }
++#parcels-list:empty { display: none; }
++.parcels-row { display: flex; align-items: baseline; gap: 8px; margin: 0; padding: 5px 2px; border-bottom: 1px solid var(--line); font-size: 12px; cursor: pointer; }
++.parcels-row:hover { background: var(--field); }
++.parcels-row span { overflow-wrap: anywhere; }
